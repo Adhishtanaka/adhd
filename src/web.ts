@@ -332,6 +332,14 @@ Bun.serve({
       if (!isUnderRoots(fp)) return new Response("forbidden", { status: 403 });
       const file = Bun.file(fp);
       if (!(await file.exists())) return new Response("not found", { status: 404 });
+      // A local file is user DATA, never app code. If someone navigates straight
+      // to one (an .html or .svg can carry script), these stop it executing in
+      // this origin — which can POST to /chat and /confirm. Images and video are
+      // loaded as subresources (<img>/<video>), which these headers don't affect.
+      const guard = {
+        "content-security-policy": "sandbox; default-src 'none'",
+        "x-content-type-options": "nosniff",
+      };
       const range = req.headers.get("range");
       if (range) {
         const size = file.size;
@@ -343,6 +351,7 @@ Bun.serve({
         return new Response(file.slice(start, end + 1), {
           status: 206,
           headers: {
+            ...guard,
             "content-range": `bytes ${start}-${end}/${size}`,
             "accept-ranges": "bytes",
             "content-length": String(end - start + 1),
@@ -350,7 +359,7 @@ Bun.serve({
           },
         });
       }
-      return new Response(file, { headers: { "accept-ranges": "bytes" } });
+      return new Response(file, { headers: { ...guard, "accept-ranges": "bytes" } });
     }
 
     // SSE stream

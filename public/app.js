@@ -74,6 +74,19 @@ function block(label, node) {
   return wrap;
 }
 const localUrl = (src) => (String(src).startsWith("local://") ? "/local?path=" + encodeURIComponent(String(src).slice(8)) : src);
+// Anchor hrefs come straight from the model's render_ui spec (Link, References),
+// which never passes through the server's HTML sanitizer. Allow only web schemes:
+// blocks javascript:/data: and same-origin /local navigations that would run in
+// this origin. Returns "#" for anything else.
+const safeHref = (u) => {
+  try {
+    const { protocol, href } = new URL(String(u), location.href);
+    if (!["http:", "https:", "mailto:"].includes(protocol)) return "#";
+    return href.startsWith(location.origin + "/local") ? "#" : href;
+  } catch {
+    return "#";
+  }
+};
 
 // ---- icons: small hand-authored line-icon set, no library/dependency ----
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -376,7 +389,7 @@ function referencesEl(items) {
   const CAP = 3;
   const pillFor = (it) => {
     const a = document.createElement("a");
-    a.href = it.url;
+    a.href = safeHref(it.url);
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     a.className = "source-pill";
@@ -516,7 +529,9 @@ function mapEl(p) {
       }
       if (lat != null && lng != null) {
         const mk = L.marker([lat, lng]).addTo(map);
-        if (m.label) mk.bindPopup(m.label);
+        // bindPopup parses a string as HTML — pass a text node so a model-supplied
+        // label can't inject markup.
+        if (m.label) mk.bindPopup(el("", String(m.label)));
         pts.push([lat, lng]);
       }
     }
@@ -592,7 +607,7 @@ function renderNode(id, elements, depth) {
     }
     case "Link": {
       const a = document.createElement("a");
-      a.href = p.href; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.href = safeHref(p.href); a.target = "_blank"; a.rel = "noopener noreferrer";
       a.className = "text-signal underline"; a.textContent = p.label || p.href;
       return a;
     }
