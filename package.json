@@ -1,0 +1,25 @@
+{
+  "name": "adhd-cli",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "module": "src/web.ts",
+  "bin": {
+    "adhd": "src/web.ts"
+  },
+  "scripts": {
+    "start": "bun run src/web.ts",
+    "build": "bun build --compile --outfile adhd src/web.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@ai-sdk/deepseek": "^1.0.20",
+    "ai": "^5",
+    "marked": "^15",
+    "zod": "^3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^5"
+  }
+}
