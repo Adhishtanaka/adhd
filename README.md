@@ -1,4 +1,4 @@
-# adhd
+# ADHD
 
 A small local AI assistant for everyday work — planning, writing, research, files, reminders, quick lookups. Not a coding agent.
 
