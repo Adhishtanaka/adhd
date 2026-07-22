@@ -849,9 +849,11 @@ function connect() {
       // Sources and follow-ups belong below the answer no matter when the model
       // emits them — hold them and re-append at turn end.
       if (node) floatBottom.push({ kind, node });
-    } else if (kind === "image" || kind === "images" || kind === "video" || kind === "illustration") {
+    } else if (["image", "images", "video", "illustration", "diagram", "map"].includes(kind)) {
       // Media leads the answer; the model writes the details as prose below it,
       // so DON'T mark the turn as card-carried — keep that trailing prose.
+      // A mermaid diagram / map is media too: dropping the prose under it loses
+      // the actual answer and leaves only the picture.
     } else if (kind) contentCardThisTurn = true;
   });
   on("sub", (d) => add(el("font-mono text-xs text-dim pl-4", d.line)));
