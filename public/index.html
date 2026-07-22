@@ -8,6 +8,24 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://esm.sh/@xyflow/react@12.3.5/dist/style.css" />
+    <!-- Flows page only. esm.sh serves a module graph, which can't carry SRI, so
+         versions are pinned exactly; vendor these into public/ if offline use or
+         CDN trust ever matters. ?external=react,react-dom is load-bearing: without
+         it esm.sh inlines its own React and React Flow's hooks run against a second
+         copy ("invalid hook call"). This ESM React is still separate from the UMD
+         React app.js uses — different roots, they never share state. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18.3.1",
+          "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+          "react-dom": "https://esm.sh/react-dom@18.3.1",
+          "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+          "@xyflow/react": "https://esm.sh/@xyflow/react@12.3.5?external=react,react-dom"
+        }
+      }
+    </script>
     <script>
       // Apply saved theme before first paint (no flash of wrong theme).
       // "system" (default) leaves data-theme unset so the media query decides.
@@ -187,6 +205,7 @@
     </style>
     <script src="/htmx.min.js" defer></script>
     <script src="/app.js" defer></script>
+    <script type="module" src="/flow.js"></script>
   </head>
   <body class="bg-base text-paper font-sans min-h-screen flex">
     <div id="app-shell" class="flex-1 flex flex-col min-w-0">
@@ -198,6 +217,7 @@
           <button id="new-chat" class="flex items-center gap-1 text-dim hover:text-paper transition">New chat</button>
           <select id="model-select" aria-label="Model" class="bg-transparent text-paper/70 outline-none cursor-pointer hover:text-paper transition-colors"></select>
           <span><span id="tokens">0</span> tok</span>
+          <button id="open-flows" class="text-dim hover:text-paper transition flex items-center gap-1">Flows</button>
           <button id="open-settings" class="text-dim hover:text-paper transition flex items-center gap-1">Settings</button>
         </div>
       </header>
@@ -240,5 +260,8 @@
       </div>
       <div id="settings" class="settings p-5 text-sm max-w-2xl mx-auto"></div>
     </section>
+
+    <!-- Flows: full-screen like #panel. flow.js mounts the React Flow canvas here. -->
+    <section id="flows-panel" class="hidden fixed inset-0 bg-base z-30 flex flex-col"></section>
   </body>
 </html>

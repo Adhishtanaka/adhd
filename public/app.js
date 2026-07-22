@@ -858,6 +858,9 @@ function connect() {
   });
   on("sub", (d) => add(el("font-mono text-xs text-dim pl-4", d.line)));
   on("info", (d) => add(el("font-mono text-xs text-dim", d.message)));
+  // flow progress belongs to the Flows page (flow.js registers the handler);
+  // one EventSource for the whole app, so it's forwarded rather than duplicated.
+  on("flow", (d) => window.onFlowEvent?.(d));
   on("error", (d) => add(el("font-mono text-xs text-bad", "error: " + d.message)));
   on("usage", (d) => {
     tokens += d.total;

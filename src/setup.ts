@@ -6,7 +6,8 @@ import { builtinTools, loadUserTools } from "./tools.js";
 import { loadSkills, skillsPromptSection, useSkillTool } from "./skills.js";
 import { loadMemories, memoryPromptSection, memoryTools } from "./memory.js";
 import { scheduleTools } from "./scheduler.js";
-import { spawnAgentTool } from "./subagent.js";
+import { spawnAgentTool, reportSubagent } from "./subagent.js";
+import { flowRunner, runFlowTool, toolArgSpecs, type FlowRunner, type ArgSpec } from "./flows.js";
 import { loopTaskTool } from "./loop.js";
 import { renderUiTool, catalogPromptSection } from "./render.js";
 import { createAgent, type Agent } from "./agent.js";
@@ -65,6 +66,8 @@ export type Built = {
   toolNames: string[];
   skillNames: string[];
   memoryIds: string[];
+  runFlow: FlowRunner; // execute a saved flow (Flows page / scheduler)
+  toolArgs: Record<string, ArgSpec[]>; // per-tool argument fields, for the Flows canvas
   hasKey: () => boolean; // DEEPSEEK key present?
   setModel: (id: string) => void; // switch + persist (keeps history)
   refreshModels: () => void; // re-resolve after a key was added
@@ -105,10 +108,15 @@ export async function buildAgent(): Promise<Built> {
     /* no API key yet — models stays empty, chat gated on hasKey() */
   }
 
+  // Tool nodes get subagentTools, so a flow can't call run_flow (depth 1).
+  // Prompt nodes get no tools at all — see flows.ts.
+  const runFlow = flowRunner({ models, tools: subagentTools });
+
   const tools: Record<string, Tool> = {
     ...baseTools,
     spawn_agent: spawnAgentTool({ models, tools: subagentTools, system, historyBudget: config.historyBudget }),
     loop_task: loopTaskTool({ models, tools: subagentTools, system, historyBudget: config.historyBudget }),
+    run_flow: runFlowTool(runFlow, reportSubagent),
     render_ui: renderUiTool(), // main agent only — subagents return text, not UI
   };
 
@@ -126,6 +134,8 @@ export async function buildAgent(): Promise<Built> {
     toolNames: Object.keys(tools),
     skillNames: Object.keys(skills),
     memoryIds: memories.map((m) => m.id),
+    runFlow,
+    toolArgs: toolArgSpecs(subagentTools),
     hasKey: () => !!process.env.DEEPSEEK_API_KEY,
     setModel: (id) => {
       swap([id]);

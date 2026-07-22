@@ -1,0 +1,194 @@
+import { test, expect } from "bun:test";
+import { runFlow, fill, coerce, toolArgSpecs, RunControl, type Flow, type FlowExec, type FlowEvent } from "../src/flows.js";
+import { builtinTools } from "../src/tools.js";
+
+// Executors are stubbed — traversal is what's under test, no model involved.
+function stub(over: Partial<FlowExec> = {}): FlowExec & { seen: string[] } {
+  const seen: string[] = [];
+  return {
+    seen,
+    runPrompt: async (p, input) => {
+      seen.push(`prompt:${p}`);
+      return input ? `${input}>${p}` : p;
+    },
+    runIf: async (q) => {
+      seen.push(`if:${q}`);
+      return true;
+    },
+    runTool: async (name, args, input) => {
+      seen.push(`tool:${name}:${JSON.stringify(args)}:${input}`);
+      return `ran ${name}`;
+    },
+    ...over,
+  };
+}
+
+const node = (id: string, type: any, data: any = {}) => ({ id, type, data });
+const edge = (source: string, target: string, sourceHandle?: string) => ({ source, target, sourceHandle });
+
+test("runs a linear chain in order, threading output forward", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "linear",
+    nodes: [node("a", "prompt", { prompt: "A" }), node("b", "prompt", { prompt: "B" }), node("c", "prompt", { prompt: "C" })],
+    edges: [edge("a", "b"), edge("b", "c")],
+  };
+  const ex = stub();
+  expect(await runFlow(flow, ex)).toBe("A>B>C");
+  expect(ex.seen).toEqual(["prompt:A", "prompt:B", "prompt:C"]);
+});
+
+test("if node takes the yes edge, then the no edge", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "branch",
+    nodes: [node("q", "if", { question: "rain?" }), node("y", "prompt", { prompt: "YES" }), node("n", "prompt", { prompt: "NO" })],
+    edges: [edge("q", "y", "yes"), edge("q", "n", "no")],
+  };
+  expect(await runFlow(flow, stub())).toBe("YES");
+  expect(await runFlow(flow, stub({ runIf: async () => false }))).toBe("NO");
+});
+
+test("tool node gets its args and the previous output", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "tool",
+    nodes: [node("p", "prompt", { prompt: "hello" }), node("t", "tool", { tool: "write_file", args: { path: "/tmp/x" } })],
+    edges: [edge("p", "t")],
+  };
+  const ex = stub();
+  expect(await runFlow(flow, ex)).toBe("ran write_file");
+  expect(ex.seen[1]).toBe('tool:write_file:{"path":"/tmp/x"}:hello');
+});
+
+test("{{prev}} substitutes, otherwise input is appended", () => {
+  expect(fill("summarize {{prev}} now", "DATA")).toBe("summarize DATA now");
+  expect(fill("summarize", "DATA")).toBe("summarize\n\nInput:\nDATA");
+  expect(fill("summarize", "")).toBe("summarize");
+});
+
+test("emits one event per node, with durations and the branch taken", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "events",
+    nodes: [node("q", "if", { question: "ok?" }), node("y", "prompt", { prompt: "YES" })],
+    edges: [edge("q", "y", "yes")],
+  };
+  const events: FlowEvent[] = [];
+  await runFlow(flow, stub(), (e) => events.push(e));
+  expect(events.map((e) => e.type)).toEqual(["node-start", "node-done", "node-start", "node-done", "run-done"]);
+  expect((events[1] as any).branch).toBe("yes");
+  expect((events[3] as any).output).toBe("YES");
+});
+
+test("a failing node ends the run with an error event", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "boom",
+    nodes: [node("a", "tool", { tool: "nope" }), node("b", "prompt", { prompt: "never" })],
+    edges: [edge("a", "b")],
+  };
+  const events: FlowEvent[] = [];
+  const out = await runFlow(
+    flow,
+    stub({ runTool: async () => { throw new Error("no such tool: nope"); } }),
+    (e) => events.push(e),
+  );
+  expect(out).toContain("no such tool");
+  expect(events.some((e) => e.type === "node-error")).toBe(true);
+  expect(events.some((e) => e.type === "node-start" && e.id === "b")).toBe(false);
+});
+
+test("stop halts the run at the next node boundary", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "stoppable",
+    nodes: [node("a", "prompt", { prompt: "A" }), node("b", "prompt", { prompt: "B" })],
+    edges: [edge("a", "b")],
+  };
+  const ctl = new RunControl();
+  const events: FlowEvent[] = [];
+  const ex = stub({
+    runPrompt: async (p) => {
+      ctl.stop(); // stopped while the first node is in flight
+      return p;
+    },
+  });
+  await runFlow(flow, ex, (e) => events.push(e), ctl);
+  expect(events.at(-1)!.type).toBe("run-stopped");
+  expect(events.filter((e) => e.type === "node-start").length).toBe(1);
+});
+
+test("pause blocks, resume continues", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "pausable",
+    nodes: [node("a", "prompt", { prompt: "A" }), node("b", "prompt", { prompt: "B" })],
+    edges: [edge("a", "b")],
+  };
+  const ctl = new RunControl();
+  ctl.pause();
+  const started: string[] = [];
+  const done = runFlow(flow, stub(), (e) => e.type === "node-start" && started.push(e.id), ctl);
+  await new Promise((r) => setTimeout(r, 60));
+  expect(started).toEqual([]); // gated before the first node
+  expect(ctl.state).toBe("paused");
+  ctl.resume();
+  expect(await done).toBe("A>B");
+  expect(started).toEqual(["a", "b"]);
+});
+
+test("start begins the run and end terminates it", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "bookends",
+    nodes: [
+      node("e", "end"),
+      node("p", "prompt", { prompt: "WORK" }),
+      node("s", "start"),
+      node("after", "prompt", { prompt: "UNREACHABLE" }),
+    ],
+    edges: [edge("s", "p"), edge("p", "e"), edge("e", "after")],
+  };
+  const ex = stub();
+  expect(await runFlow(flow, ex)).toBe("WORK"); // start is entry despite being 3rd
+  expect(ex.seen).toEqual(["prompt:WORK"]); // end stops the walk
+});
+
+test("canvas text is coerced to the types tool schemas expect", () => {
+  expect(coerce("5")).toBe(5);
+  expect(coerce("true")).toBe(true);
+  expect(coerce("hello")).toBe("hello");
+  expect(coerce("")).toBe("");
+});
+
+test("tool arg specs are read off the real tool schemas", () => {
+  const specs = toolArgSpecs(builtinTools());
+  const search = specs.web_search;
+  expect(search.find((a) => a.key === "q")!.required).toBe(true);
+  const type = search.find((a) => a.key === "type")!;
+  expect(type.required).toBe(false);
+  expect(type.options).toContain("news"); // enum → dropdown in the inspector
+});
+
+test("a cycle stops at the step cap instead of hanging", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "cycle",
+    nodes: [node("a", "prompt", { prompt: "A" }), node("b", "prompt", { prompt: "B" })],
+    edges: [edge("a", "b"), edge("b", "a")],
+  };
+  const ex = stub();
+  expect(await runFlow(flow, ex)).toContain("step cap");
+  expect(ex.seen.length).toBe(30);
+});
+
+test("entry is the node nothing points at, whatever the array order", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "order",
+    nodes: [node("second", "prompt", { prompt: "B" }), node("first", "prompt", { prompt: "A" })],
+    edges: [edge("first", "second")],
+  };
+  expect(await runFlow(flow, stub())).toBe("A>B");
+});

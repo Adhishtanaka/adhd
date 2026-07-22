@@ -11,6 +11,7 @@ import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, is
 import { setJobSinks, type FinishedJob } from "./jobs.js";
 import { loadMemories, saveMemory, deleteMemory } from "./memory.js";
 import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./scheduler.js";
+import { loadFlows, saveFlows, seedExamples, toolArgSpecs, RunControl, type Flow } from "./flows.js";
 
 // The AI SDK leaves some internal promises unawaited on error; swallow the stray
 // rejections so they don't crash the server (real errors reach the client).
@@ -18,6 +19,7 @@ process.on("unhandledRejection", () => {});
 
 loadSecretsIntoEnv(); // hydrate API keys from ~/.adhd/secrets.json before building
 const built = await buildAgent();
+seedExamples(); // first run: put a few worked examples on the Flows page
 
 // Prefer public/ next to the source; fall back to cwd/public (compiled binary,
 // where import.meta.dir isn't a real directory).
@@ -157,6 +159,29 @@ function drainJobs() {
   );
 }
 
+// --- flows: run a saved graph, streaming progress to the Flows page ----------
+// Shares the same `busy` flag as chat, so a flow and a chat turn never run at
+// once (they'd fight over the same agent history and the same tool confirms).
+let currentRun: RunControl | null = null; // the in-flight flow, for pause/stop
+async function runFlowById(id: string): Promise<void> {
+  const flow = loadFlows().find((f) => f.id === id);
+  if (!flow) return;
+  busy = true;
+  currentRun = new RunControl();
+  broadcast("busy", { busy: true });
+  broadcast("flow", { type: "run-start", name: flow.name });
+  try {
+    await built.runFlow(flow, (e) => broadcast("flow", e), currentRun);
+  } catch (err) {
+    broadcast("flow", { type: "node-error", id: "", ms: 0, message: (err as Error)?.message ?? String(err) });
+  } finally {
+    currentRun = null;
+    busy = false;
+    broadcast("busy", { busy: false });
+    setTimeout(drainJobs, 0);
+  }
+}
+
 // --- scheduler tick (moved from the Ink UI) ---------------------------------
 const lastRun: Record<string, number> = {};
 setInterval(() => {
@@ -167,7 +192,10 @@ setInterval(() => {
       lastRun[t.id] = now.getTime();
       broadcast("info", { message: `[scheduled] ${t.id}` });
       broadcast("notify", { title: `Scheduled: ${t.id}`, body: t.prompt });
-      void runTurn(t.prompt);
+      // A prompt of "flow:<id>" runs a saved flow instead of a chat turn — reuses
+      // the existing schedule format, so no migration and no extra UI.
+      if (t.prompt.startsWith("flow:")) void runFlowById(t.prompt.slice(5).trim());
+      else void runTurn(t.prompt);
       break; // one at a time
     }
   }
@@ -360,7 +388,8 @@ Bun.serve({
 
     // static
     if (p === "/") return new Response(Bun.file(join(PUBLIC, "index.html")));
-    if (p === "/app.js" || p === "/app.css" || p === "/htmx.min.js") return new Response(Bun.file(join(PUBLIC, p)));
+    if (p === "/app.js" || p === "/app.css" || p === "/htmx.min.js" || p === "/flow.js")
+      return new Response(Bun.file(join(PUBLIC, p)));
 
     // serve a local file — restricted to allowed roots + same-site requests only
     if (p === "/local") {
@@ -443,6 +472,32 @@ Bun.serve({
           pending.get(b.token)?.(b.answer);
           pending.delete(b.token);
           return noContent();
+        case "/flows": {
+          // Nodes/edges come straight from the canvas; stored verbatim.
+          const f = b as Flow;
+          if (!f.id || !Array.isArray(f.nodes)) return Response.json({ error: "bad-flow" }, { status: 400 });
+          saveFlows([...loadFlows().filter((x) => x.id !== f.id), f]);
+          return Response.json({ ok: true });
+        }
+        case "/flows/delete":
+          saveFlows(loadFlows().filter((f) => f.id !== b.id));
+          return Response.json({ ok: true });
+        case "/flows/run": {
+          if (!built.hasKey()) return Response.json({ error: "no-key" }, { status: 400 });
+          if (busy) return Response.json({ error: "busy" }, { status: 409 });
+          void runFlowById(String(b.id));
+          return noContent();
+        }
+        case "/flows/control": {
+          // pause / resume / stop the in-flight run
+          if (!currentRun) return Response.json({ state: "idle" });
+          if (b.action === "pause") currentRun.pause();
+          else if (b.action === "resume") currentRun.resume();
+          else if (b.action === "stop") currentRun.stop();
+          const state = currentRun?.state ?? "idle";
+          broadcast("flow", { type: "state", state });
+          return Response.json({ state });
+        }
         case "/new":
           built.agent.reset();
           return noContent();
@@ -495,6 +550,7 @@ Bun.serve({
     }
 
     if (req.method === "GET") {
+      if (p === "/flows") return Response.json(loadFlows());
       if (p === "/settings") return html(settingsFragment());
       if (p === "/memory") return html(memoryFragment());
       if (p === "/schedule") return html(scheduleFragment());
@@ -504,7 +560,17 @@ Bun.serve({
       if (p === "/state")
         // maptilerKey is a client-side map-tile key (public by design, kept in .env
         // not source) — the browser needs it to load MapTiler tiles.
-        return Response.json({ model: built.config.model, models: KNOWN_MODELS, hasKey: built.hasKey(), tools: built.toolNames.length, maptilerKey: process.env.MAPTILER_KEY ?? "" });
+        return Response.json({
+          model: built.config.model,
+          models: KNOWN_MODELS,
+          hasKey: built.hasKey(),
+          tools: built.toolNames.length,
+          // for the Flows page tool-node picker: the tools a flow node may call
+          // directly (the agent-control ones aren't usable without a model turn)
+          toolNames: built.toolNames.filter((t) => !["spawn_agent", "loop_task", "run_flow", "render_ui", "ask_user"].includes(t)),
+          toolArgs: built.toolArgs, // arg fields per tool, read off each tool's schema
+          maptilerKey: process.env.MAPTILER_KEY ?? "",
+        });
     }
 
     return new Response("not found", { status: 404 });
