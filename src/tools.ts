@@ -9,6 +9,23 @@ import { z } from "zod";
 import { ROOTS, allowedRoots, isUnderRoots, allowedCommands } from "./config.js";
 import { rankChunks, extractImages } from "./extract.js";
 import { recordFailure, isBadDomain, domainOf } from "./failcache.js";
+import { withDeadline } from "./jobs.js";
+
+// How long a tool may hold the turn open before it finishes in the background.
+// Shell gets longer than network: a command the user just approved is usually
+// one they're watching for, and bouncing it to the background reads as a stall.
+const SLOW = { net: 20_000, shell: 25_000 };
+
+// Decorate a tool so slow runs background themselves, without touching its body.
+// Only for tools that DON'T prompt the user — the shell tools wrap after their
+// approve() call instead, so time spent waiting on a human never counts.
+function deadlined(t: Tool, ms: number, label: (args: any) => string): Tool {
+  const inner = t.execute!;
+  return {
+    ...t,
+    execute: (args: any, opts: any) => withDeadline(label(args), ms, async () => String(await inner(args, opts))),
+  } as Tool;
+}
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -137,7 +154,7 @@ export function formatSerper(type: SerperType, r: any): string {
 }
 
 export function builtinTools(): Record<string, Tool> {
-  return {
+  const t: Record<string, Tool> = {
     read_file: tool({
       description: "Read a UTF-8 text file and return its contents.",
       inputSchema: z.object({ path: z.string() }),
@@ -231,15 +248,17 @@ export function builtinTools(): Record<string, Tool> {
         if (/\bsudo\b/.test(command))
           return "sudo isn't available here (no way to enter a password). Run the command without sudo, or skip the privileged path.";
         if (!(await approve("bash", command, explain))) return "user denied command";
-        try {
-          const { stdout, stderr } = await execAsync(command, {
-            maxBuffer: 10 * 1024 * 1024,
-            timeout: 120_000,
-          });
-          return cap((stdout + stderr).trim()) || "(no output)";
-        } catch (e) {
-          return `command failed: ${(e as Error).message}`;
-        }
+        return withDeadline(`bash: ${command}`, SLOW.shell, async () => {
+          try {
+            const { stdout, stderr } = await execAsync(command, {
+              maxBuffer: 10 * 1024 * 1024,
+              timeout: 120_000,
+            });
+            return cap((stdout + stderr).trim()) || "(no output)";
+          } catch (e) {
+            return `command failed: ${(e as Error).message}`;
+          }
+        });
       },
     }),
     powershell: tool({
@@ -248,16 +267,18 @@ export function builtinTools(): Record<string, Tool> {
       inputSchema: z.object({ command: z.string(), explain: EXPLAIN }),
       execute: async ({ command, explain }) => {
         if (!(await approve("pwsh", command, explain))) return "user denied command";
-        try {
-          const { stdout, stderr } = await execFileAsync("pwsh", ["-NoProfile", "-Command", command], {
-            maxBuffer: 10 * 1024 * 1024,
-            timeout: 120_000,
-          });
-          return cap((stdout + stderr).trim()) || "(no output)";
-        } catch (e: any) {
-          if (e.code === "ENOENT") return "powershell needs pwsh installed — see https://aka.ms/powershell";
-          return `command failed: ${e.message}`;
-        }
+        return withDeadline(`powershell: ${command}`, SLOW.shell, async () => {
+          try {
+            const { stdout, stderr } = await execFileAsync("pwsh", ["-NoProfile", "-Command", command], {
+              maxBuffer: 10 * 1024 * 1024,
+              timeout: 120_000,
+            });
+            return cap((stdout + stderr).trim()) || "(no output)";
+          } catch (e: any) {
+            if (e.code === "ENOENT") return "powershell needs pwsh installed — see https://aka.ms/powershell";
+            return `command failed: ${e.message}`;
+          }
+        });
       },
     }),
     run_script: tool({
@@ -274,15 +295,17 @@ export function builtinTools(): Record<string, Tool> {
           return "user denied script";
         const file = join(tmpdir(), `adhd-${Date.now()}.ts`);
         writeFileSync(file, code);
-        try {
-          const { stdout, stderr } = await execFileAsync("bun", ["run", file], {
-            maxBuffer: 10 * 1024 * 1024,
-            timeout: 120_000,
-          });
-          return cap((stdout + stderr).trim()) || "(no output)";
-        } catch (e) {
-          return `script failed: ${(e as Error).message}`;
-        }
+        return withDeadline(`run_script: ${code.split("\n")[0]}`, SLOW.shell, async () => {
+          try {
+            const { stdout, stderr } = await execFileAsync("bun", ["run", file], {
+              maxBuffer: 10 * 1024 * 1024,
+              timeout: 120_000,
+            });
+            return cap((stdout + stderr).trim()) || "(no output)";
+          } catch (e) {
+            return `script failed: ${(e as Error).message}`;
+          }
+        });
       },
     }),
     ask_user: tool({
@@ -426,6 +449,14 @@ export function builtinTools(): Record<string, Tool> {
         return hits.map((h) => `- ${basename(h)}: local://${h}`).join("\n");
       },
     }),
+  };
+  // Network/disk tools have no approval prompt, so the whole call is machine
+  // time and safe to put on a deadline wholesale.
+  return {
+    ...t,
+    web_search: deadlined(t.web_search, SLOW.net, (a) => `web_search: ${a.q}`),
+    web_fetch: deadlined(t.web_fetch, SLOW.net, (a) => `web_fetch: ${a.url}`),
+    search_files: deadlined(t.search_files, SLOW.net, (a) => `search_files: ${a.query}`),
   };
 }
 

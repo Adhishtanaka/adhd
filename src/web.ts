@@ -8,6 +8,7 @@ import { setRenderSink } from "./render.js";
 import { sanitize } from "./sanitize.js";
 import { listFailures, clearFailures, removeDomain } from "./failcache.js";
 import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, type KeyName } from "./config.js";
+import { setJobSinks, type FinishedJob } from "./jobs.js";
 import { loadMemories, saveMemory, deleteMemory } from "./memory.js";
 import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./scheduler.js";
 
@@ -125,7 +126,35 @@ async function runTurn(message: string) {
   } finally {
     busy = false;
     broadcast("busy", { busy: false });
+    // A job may have landed while this turn was running — pick it up now that
+    // the agent is free. setTimeout, not a direct call, so the next turn starts
+    // on a clean stack rather than nested inside this one's finally.
+    setTimeout(drainJobs, 0);
   }
+}
+
+// --- background jobs: a slow tool ends its turn, then wakes the agent ---------
+// A tool that blows its deadline hands the turn back (see jobs.ts) so the UI
+// goes idle and the user can keep chatting. Its result arrives here later and is
+// replayed to the agent as a new turn — one at a time, never while it's busy.
+const finishedJobs: FinishedJob[] = [];
+setJobSinks(
+  (j) => {
+    finishedJobs.push(j);
+    broadcast("info", { message: `[${j.id}] ${j.label} — finished after ${j.seconds}s` });
+    drainJobs();
+  },
+  (id, label) => broadcast("info", { message: `[${id}] ${label} — still running, continuing in the background` }),
+);
+function drainJobs() {
+  if (busy || !finishedJobs.length || !built.hasKey()) return;
+  const j = finishedJobs.shift()!;
+  broadcast("notify", { title: "Background task finished", body: j.label });
+  void runTurn(
+    `[background job ${j.id} finished — "${j.label}", took ${j.seconds}s]\n\n${j.result}\n\n` +
+      `This is the result of the tool call you backgrounded earlier. Do not re-run that work. ` +
+      `Continue from here and give the user the answer they were waiting for.`,
+  );
 }
 
 // --- scheduler tick (moved from the Ink UI) ---------------------------------
@@ -147,6 +176,15 @@ setInterval(() => {
 // --- HTML fragments (HTMX targets) ------------------------------------------
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
+// Every section is rendered INLINE, not as a nested `hx-trigger="load"` div that
+// fetches itself. Those self-loading children raced the parent: re-swapping
+// #settings (saving a key returns a fresh fragment) detached them while their
+// own request was still in flight, and htmx then threw on the null target —
+// which aborted processing, leaving the sections BELOW it permanently empty.
+// These are all cheap local file reads, so inlining costs nothing and removes
+// five round-trips along with the race. The /memory, /schedule, /roots,
+// /allowed and /failures endpoints still exist — the forms POST to them and
+// swap the result into #mem, #sched, etc.
 function settingsFragment(): string {
   const ks = keyStatus();
   const keyRows = KEY_NAMES.map(
@@ -178,13 +216,13 @@ function settingsFragment(): string {
     <p class="muted">Stored in <span class="mono">~/.adhd/secrets.json</span> (chmod 600). Keys never leave this machine.</p>
     <div class="settings-section">${keyRows}</div>
     <h2>Memory <span class="muted">(${built.memoryIds.length ? "" : "none yet"})</span></h2>
-    <div class="settings-section"><div id="mem" hx-get="/memory" hx-trigger="load" hx-swap="innerHTML"></div></div>
+    <div class="settings-section"><div id="mem">${memoryFragment()}</div></div>
     <h2>Schedule</h2>
-    <div class="settings-section"><div id="sched" hx-get="/schedule" hx-trigger="load" hx-swap="innerHTML"></div></div>
+    <div class="settings-section"><div id="sched">${scheduleFragment()}</div></div>
     <h2>Local folders <span class="muted">(files adhd may read)</span></h2>
-    <div class="settings-section"><div id="roots" hx-get="/roots" hx-trigger="load" hx-swap="innerHTML"></div></div>
+    <div class="settings-section"><div id="roots">${rootsFragment()}</div></div>
     <h2>Always-allowed commands <span class="muted">(run without asking)</span></h2>
-    <div class="settings-section"><div id="allowed" hx-get="/allowed" hx-trigger="load" hx-swap="innerHTML"></div></div>
+    <div class="settings-section"><div id="allowed">${allowedFragment()}</div></div>
     <h2>Notifications</h2>
     <div class="settings-section">
       <div class="row">
@@ -193,7 +231,7 @@ function settingsFragment(): string {
       </div>
     </div>
     <h2>Blocked pages <span class="muted">(fetch failures)</span></h2>
-    <div class="settings-section"><div id="fails" hx-get="/failures" hx-trigger="load" hx-swap="innerHTML"></div></div>`;
+    <div class="settings-section"><div id="fails">${failuresFragment()}</div></div>`;
 }
 
 function rootsFragment(): string {
