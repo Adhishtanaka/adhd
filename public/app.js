@@ -1,6 +1,8 @@
-// adhd web UI — SSE transcript, composer, and a vanilla generative-UI renderer
-// (json-render spec shape, no framework). HTMX drives settings/memory/schedule/
-// failures/roots forms; this file owns the live conversation + rich rendering.
+// adhd web UI — SSE transcript, composer, and a React generative-UI renderer
+// (json-render: a flat spec tree dispatched through a component REGISTRY).
+// React/ReactDOM load as UMD globals from the CDN — no build step. HTMX drives
+// settings/memory/schedule/failures/roots forms; the transcript itself stays
+// imperative (append-only log); this file owns the conversation + rich rendering.
 const log = document.getElementById("log");
 const chatArea = document.getElementById("chat-area");
 const setHome = (on) => chatArea.classList.toggle("home", on);
@@ -24,6 +26,7 @@ let contentCardThisTurn = false; // a card carried the answer — trim prose to 
 let floatBottom = []; // sources / follow-up blocks — always moved below the answer at turn end
 let current = null;
 let labeledThisTurn = false;
+let specRoots = []; // mounted React roots for render_ui blocks — unmounted on "New chat"
 let toolSummary = null; // the current turn's collapsible tool-activity wrapper, lazily created
 let turnStartTime = null;
 
@@ -427,56 +430,6 @@ function mermaidEl(code) {
   else holder.textContent = code;
   return holder;
 }
-// ---- data viz ----
-function tableEl(p) {
-  const wrap = el("frame overflow-x-auto");
-  const t = document.createElement("table");
-  t.className = "data";
-  if (p.columns) {
-    const thead = document.createElement("thead");
-    const tr = document.createElement("tr");
-    p.columns.forEach((c) => {
-      const th = document.createElement("th");
-      th.textContent = c;
-      tr.append(th);
-    });
-    thead.append(tr);
-    t.append(thead);
-  }
-  const tb = document.createElement("tbody");
-  (p.rows || []).forEach((row) => {
-    const tr = document.createElement("tr");
-    (row || []).forEach((cell) => {
-      const td = document.createElement("td");
-      td.textContent = String(cell);
-      tr.append(td);
-    });
-    tb.append(tr);
-  });
-  t.append(tb);
-  wrap.append(t);
-  return wrap;
-}
-function metricEl(p) {
-  const c = el("frame metric");
-  c.append(el("eyebrow", p.label || ""));
-  c.append(el("v", (p.value ?? "") + (p.unit ? " " + p.unit : "")));
-  if (p.delta != null) {
-    const cls = p.delta > 0 ? "text-done" : p.delta < 0 ? "text-bad" : "text-dim";
-    c.append(el("text-xs mt-0.5 " + cls, (p.delta > 0 ? "▲ " : p.delta < 0 ? "▼ " : "") + p.delta));
-  }
-  return c;
-}
-function progressEl(p) {
-  const c = el("space-y-1");
-  if (p.label) c.append(el("eyebrow", p.label + "  " + Math.round(p.value || 0) + "%"));
-  const bar = el("w-full bg-raise rounded-full h-2 overflow-hidden");
-  const fill = el("h-full bg-signal rounded-full");
-  fill.style.width = Math.max(0, Math.min(100, p.value || 0)) + "%";
-  bar.append(fill);
-  c.append(bar);
-  return c;
-}
 // ---- maps (Leaflet + OSM/OSRM, keyless) ----
 async function geocode(q) {
   try {
@@ -562,64 +515,135 @@ function mapEl(p) {
   return holder;
 }
 
-// ---- spec renderer ----
-function renderNode(id, elements, depth) {
+// ---- spec renderer: json-render tree → React ----
+// The spec is a flat id→element map; <Node> walks it and dispatches on `type`
+// through REGISTRY. Every child gets a key, so a re-render reconciles instead of
+// re-appending — the structural reason a duplicated spec can't paint twice.
+const h = React.createElement;
+// Escape hatch for leaf widgets that own their DOM imperatively (Leaflet,
+// mermaid's async render, the gallery's hero swap, lightbox/download chrome).
+// React mounts the node once and stays out of it.
+function Native({ make }) {
+  const host = React.useRef(null);
+  React.useEffect(() => {
+    const node = make();
+    host.current.append(node);
+    return () => node.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount once; the spec node never changes identity
+  }, []);
+  return h("div", { ref: host });
+}
+const native = (make) => h(Native, { make });
+const REGISTRY = {
+  // props.html is server-sanitized markdown (see setRenderSink in web.ts); the
+  // model's raw html field is stripped there and never reaches this.
+  Text: ({ p }) =>
+    p.html != null
+      ? h("div", { className: "md text-paper/95", ref: (n) => n && enrich(n), dangerouslySetInnerHTML: { __html: p.html } })
+      : h("div", { className: "md text-paper/95" }, p.content || ""),
+  Heading: ({ p }) =>
+    h("h" + Math.min(3, Math.max(1, p.level || 2)), { className: "font-display font-semibold" }, p.content || ""),
+  Image: ({ p }) => native(() => imageEl(p.src, p.alt, p.caption)),
+  Svg: ({ p }) => native(() => svgEl(p.code, p.background)),
+  Video: ({ p }) => native(() => videoEl(p.src, p.provider)),
+  Mermaid: ({ p }) => native(() => mermaidEl(p.code)),
+  Map: ({ p }) => native(() => mapEl(p)),
+  References: ({ p }) => native(() => referencesEl(p.items)),
+  FollowUps: ({ p }) => native(() => followUpsEl(p.items)),
+  Gallery: ({ node, elements }) =>
+    native(() =>
+      galleryEl(
+        (node.children || []).map((c) => (elements[c] ? { type: elements[c].type, ...(elements[c].props || {}) } : null)),
+      ),
+    ),
+  Card: ({ p, kids }) =>
+    h(
+      "div",
+      { className: "frame space-y-2" },
+      p.title ? h("div", { className: "font-display font-semibold", key: "title" }, p.title) : null,
+      kids,
+    ),
+  Grid: ({ kids }) => h("div", { className: "grid gap-3 sm:grid-cols-2" }, kids),
+  List: ({ p }) =>
+    h(
+      p.ordered ? "ol" : "ul",
+      { className: "pl-5 space-y-1 " + (p.ordered ? "list-decimal" : "list-disc") },
+      (p.items || []).map((it, i) => h("li", { key: i }, it)),
+    ),
+  Link: ({ p }) =>
+    h(
+      "a",
+      { href: safeHref(p.href), target: "_blank", rel: "noopener noreferrer", className: "text-signal underline" },
+      p.label || p.href,
+    ),
+  Table: ({ p }) =>
+    h(
+      "div",
+      { className: "frame overflow-x-auto" },
+      h(
+        "table",
+        { className: "data" },
+        p.columns ? h("thead", null, h("tr", null, p.columns.map((c, i) => h("th", { key: i }, c)))) : null,
+        h(
+          "tbody",
+          null,
+          (p.rows || []).map((row, i) =>
+            h("tr", { key: i }, (row || []).map((cell, j) => h("td", { key: j }, String(cell)))),
+          ),
+        ),
+      ),
+    ),
+  Metric: ({ p }) =>
+    h(
+      "div",
+      { className: "frame metric" },
+      h("div", { className: "eyebrow" }, p.label || ""),
+      h("div", { className: "v" }, (p.value ?? "") + (p.unit ? " " + p.unit : "")),
+      p.delta != null
+        ? h(
+            "div",
+            { className: "text-xs mt-0.5 " + (p.delta > 0 ? "text-done" : p.delta < 0 ? "text-bad" : "text-dim") },
+            (p.delta > 0 ? "▲ " : p.delta < 0 ? "▼ " : "") + p.delta,
+          )
+        : null,
+    ),
+  Progress: ({ p }) =>
+    h(
+      "div",
+      { className: "space-y-1" },
+      p.label ? h("div", { className: "eyebrow" }, p.label + "  " + Math.round(p.value || 0) + "%") : null,
+      h(
+        "div",
+        { className: "w-full bg-raise rounded-full h-2 overflow-hidden" },
+        h("div", {
+          className: "h-full bg-signal rounded-full",
+          style: { width: Math.max(0, Math.min(100, p.value || 0)) + "%" },
+        }),
+      ),
+    ),
+};
+// React unmounts the entire root when a child throws, so without a boundary one
+// bad node silently blanks the whole block — and a throw during React's async
+// render never reaches renderSpec's try/catch.
+class Boundary extends React.Component {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed
+      ? h("div", { className: "font-mono text-xs text-bad" }, "could not render UI block")
+      : this.props.children;
+  }
+}
+function Node({ id, elements, depth }) {
   const node = elements[id];
-  if (!node || depth > 20) return el("");
-  const p = node.props || {};
+  if (!node || depth > 20) return null;
   // Dedupe child ids: a model that lists the same id twice ("children":["t1","t1"])
   // would otherwise render that Table/Map twice inside the Card.
-  const kids = () => [...new Set(node.children || [])].map((c) => renderNode(c, elements, depth + 1));
-  switch (node.type) {
-    case "Text": {
-      const t = el("md text-paper/95");
-      if (p.html != null) { t.innerHTML = p.html; enrich(t); } else t.textContent = p.content || "";
-      return t;
-    }
-    case "Heading": {
-      const h = document.createElement("h" + Math.min(3, Math.max(1, p.level || 2)));
-      h.className = "font-display font-semibold";
-      h.textContent = p.content || "";
-      return h;
-    }
-    case "Image": return imageEl(p.src, p.alt, p.caption);
-    case "Svg": return svgEl(p.code, p.background);
-    case "Gallery": {
-      const items = (node.children || []).map((c) => {
-        const n = elements[c];
-        return n ? { type: n.type, ...(n.props || {}) } : null;
-      });
-      return galleryEl(items);
-    }
-    case "Video": return videoEl(p.src, p.provider);
-    case "Card": {
-      const c = el("frame space-y-2");
-      if (p.title) c.append(el("font-display font-semibold", p.title));
-      kids().forEach((k) => c.append(k));
-      return c;
-    }
-    case "Grid": { const g = el("grid gap-3 sm:grid-cols-2"); kids().forEach((k) => g.append(k)); return g; }
-    case "List": {
-      const l = document.createElement(p.ordered ? "ol" : "ul");
-      l.className = "pl-5 space-y-1 " + (p.ordered ? "list-decimal" : "list-disc");
-      (p.items || []).forEach((it) => { const li = document.createElement("li"); li.textContent = it; l.append(li); });
-      return l;
-    }
-    case "Link": {
-      const a = document.createElement("a");
-      a.href = safeHref(p.href); a.target = "_blank"; a.rel = "noopener noreferrer";
-      a.className = "text-signal underline"; a.textContent = p.label || p.href;
-      return a;
-    }
-    case "References": return referencesEl(p.items);
-    case "FollowUps": return followUpsEl(p.items);
-    case "Mermaid": return mermaidEl(p.code);
-    case "Table": return tableEl(p);
-    case "Metric": return metricEl(p);
-    case "Progress": return progressEl(p);
-    case "Map": return mapEl(p);
-    default: { const c = el("space-y-2"); kids().forEach((k) => c.append(k)); return c; }
-  }
+  const kids = [...new Set(node.children || [])].map((c) => h(Node, { key: c, id: c, elements, depth: depth + 1 }));
+  const C = REGISTRY[node.type];
+  return C ? h(C, { p: node.props || {}, kids, node, elements }) : h("div", { className: "space-y-2" }, kids);
 }
 // Suggested next questions as clickable chips — tapping one asks it.
 // Real <button>s (not just styled divs) so they're natively keyboard-reachable;
@@ -688,14 +712,20 @@ function renderSpec(spec) {
   const sig = specSig(spec);
   if (shownSpecs.has(sig)) return;
   shownSpecs.add(sig);
+  const type = spec.elements?.[spec.root]?.type;
+  // A References block whose sources were ALL already cited this turn would
+  // render empty — drop it up front. This has to be decided from the spec, not
+  // from the mounted DOM: React renders asynchronously, so the old
+  // "is the node empty?" check would now always see an empty node.
+  // Peek at shownSources without consuming — referencesEl does the real filter.
+  if (type === "References" && !(spec.elements[spec.root].props?.items || []).some((it) => it?.url && !shownSources.has(it.url)))
+    return;
   const inner = el("");
   try {
-    inner.append(renderNode(spec.root, spec.elements || {}, 0));
-    // A References block whose sources were all already cited this turn renders
-    // empty — drop it. Scope this to References only: other blocks (Map, Mermaid,
-    // Mermaid) fill in asynchronously and look empty at this synchronous check.
-    if (spec.elements?.[spec.root]?.type === "References" && !inner.textContent.trim()) return;
-    return add(block(KIND[spec.elements?.[spec.root]?.type] || "view", inner));
+    const root = ReactDOM.createRoot(inner);
+    specRoots.push(root);
+    root.render(h(Boundary, null, h(Node, { id: spec.root, elements: spec.elements || {}, depth: 0 })));
+    return add(block(KIND[type] || "view", inner));
   } catch {
     add(el("font-mono text-xs text-bad", "could not render UI block"));
   }
@@ -977,6 +1007,10 @@ const newChatBtn = document.getElementById("new-chat");
 newChatBtn.prepend(icon("plus"));
 newChatBtn.onclick = async () => {
   await post("/new", {});
+  // Unmount before clearing the DOM, so Native's cleanup runs (Leaflet maps and
+  // video iframes otherwise leak past the transcript that held them).
+  specRoots.forEach((r) => r.unmount());
+  specRoots = [];
   log.innerHTML = "";
   setHome(true);
   tokens = 0;

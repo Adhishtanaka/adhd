@@ -43,6 +43,14 @@
         },
       };
     </script>
+    <!-- Exact versions + SRI: the spec renderer runs model-supplied content, so a
+         swapped CDN payload would be running in this origin. -->
+    <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"
+            integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z"
+            crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
+            integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1"
+            crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
@@ -110,7 +118,10 @@
       .media-placeholder { min-height: var(--media-max-h); background: rgb(var(--c-surface)); display: flex; align-items: center; justify-content: center; border-radius: 10px; }
       table.data { border-collapse: collapse; width: 100%; font-size: 0.85rem; } table.data td, table.data th { border: 1px solid rgb(var(--c-border)); padding: 0.35rem 0.6rem; text-align: left; } table.data th { color: rgb(var(--c-accent-2)); font-family: var(--font-display); }
       .metric .v { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; }
-      .leaflet-container { border-radius: 10px; }
+      /* z-index:0 makes the map its own stacking context, so Leaflet's internal
+         panes (z-index 400-700) stay trapped inside it instead of competing in
+         the root context — where they'd paint over #panel (z-30) and #lightbox. */
+      .leaflet-container { border-radius: 10px; position: relative; z-index: 0; }
       dialog#lightbox { background: transparent; border: none; max-width: 96vw; max-height: 96vh; padding: 0; }
       dialog#lightbox::backdrop { background: rgb(0 0 0 / 0.85); }
       dialog#lightbox img, dialog#lightbox svg { max-width: 96vw; max-height: 96vh; border-radius: 8px; }
