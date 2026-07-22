@@ -660,11 +660,32 @@ function followUpsEl(items) {
   return wrap;
 }
 const KIND = { Gallery: "images", Image: "image", Svg: "illustration", Video: "video", References: "sources", FollowUps: "related", Mermaid: "diagram", Table: "table", Metric: "metric", Map: "map", Card: "view", Grid: "view" };
+// SPEC_SIG_START — structural signature, id-agnostic (see test/specsig.test.ts)
+// Walks the tree from the root emitting type + sorted props + children, so a
+// re-emitted block with fresh element ids or a different key order hashes the
+// same. props.html is skipped: the server derives it from props.content.
+function specSig(spec) {
+  const seen = new Set();
+  const walk = (id) => {
+    const n = spec.elements?.[id];
+    if (!n || seen.has(id)) return "";
+    seen.add(id);
+    const p = n.props || {};
+    const props = Object.keys(p)
+      .filter((k) => k !== "html")
+      .sort()
+      .map((k) => k + ":" + JSON.stringify(p[k]))
+      .join(",");
+    return `${n.type}{${props}}[${(n.children || []).map(walk).join("|")}]`;
+  };
+  return walk(spec.root);
+}
+// SPEC_SIG_END
 function renderSpec(spec) {
   // Same block, twice in one turn: the model re-emits a Card/Table/Map it already
   // drew, and an agent retry after a mid-step error replays the render_ui call.
-  // Both land here as an identical spec — draw it once per turn.
-  const sig = JSON.stringify(spec);
+  // Draw it once per turn.
+  const sig = specSig(spec);
   if (shownSpecs.has(sig)) return;
   shownSpecs.add(sig);
   const inner = el("");
