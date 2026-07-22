@@ -86,6 +86,10 @@ export function catalogPromptSection(): string {
     "When the user asks for a VIDEO, song, trailer, clip, or YouTube link, ALWAYS render a Video block (it embeds and " +
     "plays inline) with the watch URL as `src` — never just paste the link in prose. Find the URL with web_search " +
     "type:'videos' first if you don't have it.\n" +
+    "Lists of things ARE tables. The moment you have 3+ items that share the same attributes — restaurants with a " +
+    "name/address/rating, flights with a time/price, products with a spec/price — render a Table with one column per " +
+    "attribute and one row per item. Do NOT emit a Card full of Text nodes where each node is one item crammed into a " +
+    "line with dashes or pipes; that is a table you failed to make. A Card is for ONE subject, not a list of many.\n" +
     "Two hard rules to avoid repetition:\n" +
     "1. Cite sources ONCE. Emit at most a SINGLE References block per answer, at the very end. Never repeat the same " +
     "sources across multiple render_ui calls, and don't restate URLs in prose too.\n" +
