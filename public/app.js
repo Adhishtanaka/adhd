@@ -57,12 +57,24 @@ matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
 });
 initMermaid();
 
+// Stay pinned to the bottom while the answer streams — and keep it pinned as
+// that content GROWS after it was appended: images decode, React mounts, mermaid
+// and Leaflet fill in async, a tool summary expands. Checking atBottom() only at
+// append time (what we used to do) missed all of that and left the view stranded
+// mid-transcript. `pinned` flips false the moment the user scrolls up, so we
+// never fight them for the scrollbar; scrolling back down re-arms it.
 const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 90;
+let pinned = true;
+log.addEventListener("scroll", () => (pinned = atBottom()));
+const stickBottom = () => {
+  if (pinned) log.scrollTop = log.scrollHeight;
+};
+const growth = new ResizeObserver(stickBottom);
 function add(node) {
-  const stick = atBottom();
   node.classList?.add("entry");
   log.appendChild(node);
-  if (stick) log.scrollTop = log.scrollHeight;
+  growth.observe(node); // follow this block as it fills in later
+  stickBottom();
   return node;
 }
 function el(cls, text) {
@@ -819,7 +831,7 @@ function connect() {
     if (!current) current = assistantNode();
     current.textContent += d.delta;
     setStatus("writing");
-    if (atBottom()) log.scrollTop = log.scrollHeight;
+    stickBottom();
   });
   on("tool-call", (d) => {
     current = null;
@@ -869,7 +881,7 @@ function connect() {
     // Float sources, then follow-ups, to the very bottom (below the answer).
     floatBottom.sort((a, b) => (a.kind === "sources" ? -1 : 1) - (b.kind === "sources" ? -1 : 1));
     floatBottom.forEach(({ node }) => log.appendChild(node));
-    if (floatBottom.length && atBottom()) log.scrollTop = log.scrollHeight;
+    stickBottom();
     floatBottom = [];
     turnAssistants = [];
     shownSources = new Set();
@@ -906,10 +918,12 @@ function confirmCard(d) {
   const c = el("frame space-y-2 approve");
   c.append(el("eyebrow", "run this?"));
   if (d.explain) c.append(el("text-sm text-paper", d.explain));
-  const details = document.createElement("details");
-  details.append(Object.assign(document.createElement("summary"), { className: "eyebrow cursor-pointer", textContent: "show command" }));
-  details.append(el("font-mono text-xs whitespace-pre-wrap mt-1.5 text-dim", d.command));
-  c.append(details);
+  // The command is shown OUTRIGHT, never behind a toggle or a tooltip. You can't
+  // approve what you can't see, and a hidden default means people click Allow
+  // without ever reading it — the explain line is the model's claim about the
+  // command, this is the command.
+  c.append(el("eyebrow mt-1", "command"));
+  c.append(el("font-mono text-xs whitespace-pre-wrap bg-raise border border-line rounded-lg px-2.5 py-2 text-paper overflow-x-auto", d.command));
 
   const answer = (ok, always) => {
     post("/confirm", { token: d.token, ok, always: !!always });
@@ -1011,7 +1025,9 @@ newChatBtn.onclick = async () => {
   // video iframes otherwise leak past the transcript that held them).
   specRoots.forEach((r) => r.unmount());
   specRoots = [];
+  growth.disconnect(); // drop observers on the transcript we're about to throw away
   log.innerHTML = "";
+  pinned = true;
   setHome(true);
   tokens = 0;
   tokensEl.textContent = "0";
