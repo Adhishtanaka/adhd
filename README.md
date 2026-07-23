@@ -2,7 +2,7 @@
 
 A small local AI assistant for everyday work — planning, writing, research, files, reminders, quick lookups. Not a coding agent.
 
-It runs on [Bun](https://bun.sh), talks to [DeepSeek](https://deepseek.com) through the [AI SDK](https://sdk.vercel.ai), and serves a ChatGPT-style web UI on `127.0.0.1`. It reads and writes files, runs shell commands, searches and fetches the web, remembers facts, schedules tasks, and delegates work to subagents — all from a chat box, with each tool call shown live.
+It runs on [Bun](https://bun.sh), talks to [DeepSeek](https://deepseek.com) through the [AI SDK](https://sdk.vercel.ai), and serves a ChatGPT-style web UI on `127.0.0.1`. It reads and writes files, runs shell commands, searches and fetches the web, remembers facts, schedules tasks, and delegates work to subagents — all from a chat box, with each tool call shown live. It also has a visual **Flows** builder: wire prompt, condition, and tool steps into a workflow you can save, run, schedule, or trigger by asking in chat.
 
 ```
 ▌ you  find nearby restaurants
@@ -29,7 +29,7 @@ flowchart TB
     agent["agent.ts · turn loop<br/>fallback chain · retries · history trim"]
     tools["tools.ts<br/>files · shell · web_search · web_fetch"]
     render["render.ts<br/>render_ui + component catalog"]
-    extra["memory.ts · skills.ts · scheduler.ts<br/>subagent.ts · loop.ts · failcache.ts"]
+    extra["memory.ts · skills.ts · scheduler.ts<br/>subagent.ts · loop.ts · flows.ts · failcache.ts"]
     san["sanitize.ts<br/>strips injection vectors"]
   end
 
@@ -86,6 +86,39 @@ flowchart TD
 
 Guards: `maxRetries: 0` (adhd owns retries, not the SDK), `stepCountIs(12)` max tool steps per turn, and history trimmed oldest-first while keeping tool-call/result pairs intact.
 
+## Flows
+
+A **Flow** is a saved workflow you draw on a canvas — n8n-style, but each node is a plain function, not an agent. Open it from the **Flows** button in the header. The canvas is [React Flow](https://reactflow.dev) loaded from a pinned CDN (no build step); the graph runs server-side in [`flows.ts`](src/flows.ts) and is stored as JSON in `~/.adhd/flows.json`.
+
+A node takes the previous node's output as its input and passes its own output on. `{{prev}}` in any field is replaced by that input; without it, the input is appended (for prompt/if text) or left alone (for tool args).
+
+```mermaid
+flowchart LR
+  s(["Start"]) --> t["Tool<br/>web_search"]
+  t --> q{"If<br/>mentions rain?"}
+  q -- yes --> y["Prompt<br/>“take an umbrella”"]
+  q -- no --> n["Prompt<br/>“no umbrella”"]
+  y --> e(["End"])
+  n --> e
+```
+
+| Node | What it does |
+|------|--------------|
+| **Start / End** | Mark where the run begins and where it stops. |
+| **Prompt** | One model call, **no tools** — deterministic by design. Optional *Use saved memory* toggle folds in what adhd knows about you (off by default). |
+| **If** | Asks the model a yes/no question about the input and follows the matching edge. |
+| **Switch** | Multi-way branch: the model sorts the input into one of your named cases (plus an automatic `else`) and follows that case's edge. Each case is its own output. |
+| **Tool** | Runs exactly one tool. Argument fields are read from the tool's own schema — required fields marked, enums become dropdowns. Shell tools still ask for approval. |
+
+Runs stream over the same SSE channel as chat: each node lights up, reports its duration, and its output is logged. A run can be **paused, resumed, or stopped** mid-flight.
+
+**Three ways to run a flow:**
+- The **Run** button on the canvas.
+- Ask in chat — the agent calls the `run_flow` tool by name.
+- Schedule it: add a task whose prompt is `flow:<id>` (Settings → Schedule).
+
+adhd ships three example flows (Morning brief, Umbrella check, File → todo list) so there's something to run on first open.
+
 ## Quick start
 
 ```bash
@@ -104,6 +137,7 @@ Add your DeepSeek key in Settings, or put it in `.env` first. Standalone binary:
 - Shows your own local files (images, video, docs) in chat, from folders you allow.
 - Remembers durable facts across sessions as [OKF](https://okf.md/spec/) markdown under `~/.adhd/memory/`.
 - Runs scheduled tasks while open, with desktop notifications.
+- Builds visual **Flows** — prompt/condition/tool steps you wire, save, run (with pause/stop), schedule, or trigger from chat.
 - Loads skills — instruction packs the model picks up on demand.
 - Delegates big self-contained subtasks to subagents, or iterates a hard task across passes with `loop_task`.
 - Light, dark, and system themes.
@@ -124,6 +158,7 @@ Add your DeepSeek key in Settings, or put it in `.env` first. Standalone binary:
 | `use_skill` | Load a skill's full instructions | — |
 | `spawn_agent` | Delegate a subtask to a subagent | — |
 | `loop_task` | Iterate a task across passes | yes |
+| `run_flow` | Run a saved Flow by name | — |
 | `render_ui` | Draw a rich block — image, table, chart, map, sources | — |
 | `ask_user` | Ask a multiple-choice question | interactive |
 

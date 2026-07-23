@@ -1,5 +1,17 @@
 import { test, expect } from "bun:test";
-import { runFlow, fill, coerce, toolArgSpecs, RunControl, type Flow, type FlowExec, type FlowEvent } from "../src/flows.js";
+import { homedir } from "node:os";
+import {
+  runFlow,
+  fill,
+  subst,
+  expandHome,
+  coerce,
+  toolArgSpecs,
+  RunControl,
+  type Flow,
+  type FlowExec,
+  type FlowEvent,
+} from "../src/flows.js";
 import { builtinTools } from "../src/tools.js";
 
 // Executors are stubbed — traversal is what's under test, no model involved.
@@ -14,6 +26,10 @@ function stub(over: Partial<FlowExec> = {}): FlowExec & { seen: string[] } {
     runIf: async (q) => {
       seen.push(`if:${q}`);
       return true;
+    },
+    runSwitch: async (cases) => {
+      seen.push(`switch:${cases.join(",")}`);
+      return cases[0] ?? "else";
     },
     runTool: async (name, args, input) => {
       seen.push(`tool:${name}:${JSON.stringify(args)}:${input}`);
@@ -49,6 +65,24 @@ test("if node takes the yes edge, then the no edge", async () => {
   expect(await runFlow(flow, stub({ runIf: async () => false }))).toBe("NO");
 });
 
+test("switch node follows the chosen case, and falls back to else", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "switch",
+    nodes: [
+      node("sw", "switch", { cases: ["billing", "technical"] }),
+      node("b", "prompt", { prompt: "BILLING" }),
+      node("t", "prompt", { prompt: "TECH" }),
+      node("o", "prompt", { prompt: "OTHER" }),
+    ],
+    edges: [edge("sw", "b", "billing"), edge("sw", "t", "technical"), edge("sw", "o", "else")],
+  };
+  expect(await runFlow(flow, stub({ runSwitch: async () => "technical" }))).toBe("TECH");
+  expect(await runFlow(flow, stub({ runSwitch: async () => "billing" }))).toBe("BILLING");
+  // a case with no matching edge routes to else
+  expect(await runFlow(flow, stub({ runSwitch: async () => "nonsense" }))).toBe("OTHER");
+});
+
 test("tool node gets its args and the previous output", async () => {
   const flow: Flow = {
     id: "f",
@@ -61,10 +95,22 @@ test("tool node gets its args and the previous output", async () => {
   expect(ex.seen[1]).toBe('tool:write_file:{"path":"/tmp/x"}:hello');
 });
 
-test("{{prev}} substitutes, otherwise input is appended", () => {
+test("{{prev}} substitutes, otherwise input is appended (prompt/if text)", () => {
   expect(fill("summarize {{prev}} now", "DATA")).toBe("summarize DATA now");
   expect(fill("summarize", "DATA")).toBe("summarize\n\nInput:\nDATA");
   expect(fill("summarize", "")).toBe("summarize");
+});
+
+test("subst only swaps the placeholder — a tool arg never grows silently (ENAMETOOLONG fix)", () => {
+  expect(subst("hi.txt", "a very long previous output")).toBe("hi.txt");
+  expect(subst("{{prev}}", "content here")).toBe("content here");
+});
+
+test("a leading ~/ in a tool arg expands to the home dir", () => {
+  expect(expandHome("~/notes.md")).toBe(`${homedir()}/notes.md`);
+  expect(expandHome("~")).toBe(homedir());
+  expect(expandHome("/abs/path")).toBe("/abs/path");
+  expect(expandHome("relative")).toBe("relative");
 });
 
 test("emits one event per node, with durations and the branch taken", async () => {
@@ -153,6 +199,18 @@ test("start begins the run and end terminates it", async () => {
   const ex = stub();
   expect(await runFlow(flow, ex)).toBe("WORK"); // start is entry despite being 3rd
   expect(ex.seen).toEqual(["prompt:WORK"]); // end stops the walk
+});
+
+test("a prompt node's useMemory flag reaches the executor", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "mem",
+    nodes: [node("a", "prompt", { prompt: "A", useMemory: true }), node("b", "prompt", { prompt: "B" })],
+    edges: [edge("a", "b")],
+  };
+  const flags: boolean[] = [];
+  await runFlow(flow, stub({ runPrompt: async (p, _i, _s, useMemory) => (flags.push(useMemory), p) }));
+  expect(flags).toEqual([true, false]); // on for A, off (default) for B
 });
 
 test("canvas text is coerced to the types tool schemas expect", () => {

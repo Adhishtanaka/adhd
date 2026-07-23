@@ -1,22 +1,35 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { generateText, tool, type Tool } from "ai";
 import type { LanguageModel } from "ai";
 import { z } from "zod";
 import { HOME_ROOT } from "./config.js";
 import { cap } from "./tools.js";
+import { loadMemories } from "./memory.js";
 
 // A flow is a saved graph the user drew on the canvas. Nodes/edges are stored in
 // React Flow's OWN shape so the page round-trips them with no mapping code —
 // position and any extra canvas fields ride along untouched.
 export const FLOWS_FILE = join(HOME_ROOT, "flows.json");
 
-export type NodeKind = "start" | "prompt" | "if" | "tool" | "end";
+export type NodeKind = "start" | "prompt" | "if" | "switch" | "tool" | "end";
 export type FlowNode = {
   id: string;
   type: NodeKind;
   position?: { x: number; y: number };
-  data: { prompt?: string; question?: string; tool?: string; args?: Record<string, string> };
+  // useMemory (prompt nodes only): fold the user's saved memories into the step
+  // so it can answer with what adhd knows about them. Off by default.
+  // cases (switch nodes only): the labels the model routes the input into; the
+  // matching edge's sourceHandle is the label, with "else" as the catch-all.
+  data: {
+    prompt?: string;
+    question?: string;
+    cases?: string[];
+    tool?: string;
+    args?: Record<string, string>;
+    useMemory?: boolean;
+  };
 };
 export type FlowEdge = { id?: string; source: string; target: string; sourceHandle?: string | null };
 export type Flow = { id: string; name: string; nodes: FlowNode[]; edges: FlowEdge[] };
@@ -98,9 +111,17 @@ export const EXAMPLE_FLOWS: Flow[] = [
   },
 ];
 
-/** First run only — never overwrites a file the user already has. */
+// A one-time marker so examples seed on the very first run only. Without it,
+// re-adding "missing" examples every launch means a deleted example keeps
+// coming back — which is exactly what we don't want.
+const SEEDED_MARK = join(HOME_ROOT, ".flows-seeded");
+
+/** Seed the example flows once, ever. After that, deletions stick. */
 export function seedExamples(): void {
+  if (existsSync(SEEDED_MARK)) return;
+  mkdirSync(HOME_ROOT, { recursive: true });
   if (!existsSync(FLOWS_FILE)) saveFlows(EXAMPLE_FLOWS);
+  writeFileSync(SEEDED_MARK, new Date().toISOString());
 }
 
 // --- what a node is ---------------------------------------------------------
@@ -143,21 +164,33 @@ export class RunControl {
 }
 
 export type FlowEvent =
+  // branch is the edge handle taken out of an if/switch node ("yes"/"no" or a case label).
   | { type: "node-start"; id: string; kind: NodeKind; label: string }
-  | { type: "node-done"; id: string; ms: number; output: string; branch?: "yes" | "no" }
+  | { type: "node-done"; id: string; ms: number; output: string; branch?: string }
   | { type: "node-error"; id: string; ms: number; message: string }
   | { type: "run-done"; output: string }
   | { type: "run-stopped" };
 
 export type FlowExec = {
-  runPrompt: (prompt: string, input: string, signal: AbortSignal) => Promise<string>;
+  runPrompt: (prompt: string, input: string, signal: AbortSignal, useMemory: boolean) => Promise<string>;
   runIf: (question: string, input: string, signal: AbortSignal) => Promise<boolean>;
+  // Returns the chosen case label — one of `cases`, or "else" if none fit.
+  runSwitch: (cases: string[], input: string, signal: AbortSignal) => Promise<string>;
   runTool: (name: string, args: Record<string, string>, input: string) => Promise<string>;
 };
 
-/** {{prev}} anywhere → the previous node's output; otherwise append it. */
+/** Just the placeholder swap — used for tool args, which must NOT grow silently. */
+export function subst(text: string, input: string): string {
+  return text.replaceAll("{{prev}}", input);
+}
+
+/**
+ * Prompt/if text: {{prev}} → the previous output, else the input is appended so
+ * the step sees it. Tool ARGS use subst() instead — auto-appending there turned
+ * a `path: "hi.txt"` into "hi.txt\n\nInput:\n…" and blew up with ENAMETOOLONG.
+ */
 export function fill(text: string, input: string): string {
-  if (text.includes("{{prev}}")) return text.replaceAll("{{prev}}", input);
+  if (text.includes("{{prev}}")) return subst(text, input);
   return input ? `${text}\n\nInput:\n${input}` : text;
 }
 
@@ -166,6 +199,15 @@ export function coerce(v: string): string | number | boolean {
   if (v === "true") return true;
   if (v === "false") return false;
   if (v !== "" && !Number.isNaN(Number(v))) return Number(v);
+  return v;
+}
+
+// The tools don't expand ~ (the agent passes absolute paths), but a person typing
+// a path on the canvas writes "~/notes.md". Expand a leading ~/ so it just works.
+const HOME = homedir();
+export function expandHome(v: string): string {
+  if (v === "~") return HOME;
+  if (v.startsWith("~/")) return join(HOME, v.slice(2));
   return v;
 }
 
@@ -208,7 +250,9 @@ const label = (n: FlowNode): string => {
   if (n.type === "tool") return n.data.tool || "(no tool)";
   if (n.type === "start") return "start";
   if (n.type === "end") return "end";
-  return (n.type === "if" ? n.data.question : n.data.prompt) || "(empty)";
+  if (n.type === "if") return n.data.question || "(empty)";
+  if (n.type === "switch") return n.data.question || `switch: ${(n.data.cases ?? []).join(" / ") || "(no cases)"}`;
+  return n.data.prompt || "(empty)";
 };
 
 /**
@@ -227,7 +271,9 @@ export async function runFlow(
   let out = "";
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    let branch: "yes" | "no" | undefined;
+    // The edge handle to leave by. undefined = a plain node with one way out;
+    // set = a branch (if → "yes"/"no", switch → a case label).
+    let branch: string | undefined;
     const started = Date.now();
     try {
       await ctl.gate();
@@ -240,10 +286,13 @@ export async function runFlow(
           emit({ type: "run-done", output: out });
           return out;
         case "prompt":
-          out = await ex.runPrompt(node.data.prompt ?? "", out, ctl.signal);
+          out = await ex.runPrompt(node.data.prompt ?? "", out, ctl.signal, !!node.data.useMemory);
           break;
         case "if":
           branch = (await ex.runIf(node.data.question ?? "", out, ctl.signal)) ? "yes" : "no";
+          break;
+        case "switch":
+          branch = await ex.runSwitch(node.data.cases ?? [], out, ctl.signal);
           break;
         case "tool":
           out = await ex.runTool(node.data.tool ?? "", node.data.args ?? {}, out);
@@ -264,9 +313,13 @@ export async function runFlow(
       return `${node.id} failed: ${message}`;
     }
 
-    const next = flow.edges.find(
-      (e) => e.source === node!.id && (branch === undefined || (e.sourceHandle ?? "yes") === branch),
-    );
+    const from = flow.edges.filter((e) => e.source === node!.id);
+    // Plain node: first edge out. Branch node: the edge whose handle matches the
+    // chosen label ("yes"/"no" or a case), falling back to an "else" edge.
+    const next =
+      branch === undefined
+        ? from.find((e) => (e.sourceHandle ?? "yes") === "yes") ?? from[0]
+        : from.find((e) => (e.sourceHandle ?? "yes") === branch) ?? from.find((e) => e.sourceHandle === "else");
     const target = next && flow.nodes.find((n) => n.id === next.target);
     if (!target) {
       emit({ type: "run-done", output: out });
@@ -284,6 +337,15 @@ const NODE_SYSTEM =
   "You are one step in an automated workflow. Do exactly what the step says with the input given. " +
   "Return only the result — no preamble, no commentary, no offers to help.";
 
+// Full memory bodies inline (capped) — a prompt node can't call recall, so the
+// content has to be in the prompt to be usable.
+function memoryBlock(): string {
+  const mems = loadMemories();
+  if (!mems.length) return "";
+  const body = mems.map((m) => `## ${m.id} (${m.type})\n${m.description}\n${m.body}`).join("\n\n");
+  return `\n\nWhat you know about the user (their saved memories):\n${cap(body, 4000)}`;
+}
+
 export type FlowRunner = (
   flow: Flow,
   emit?: (e: FlowEvent) => void,
@@ -296,10 +358,10 @@ export type FlowRunner = (
  * stops a step from running off on its own research spree.
  */
 export function flowRunner(opts: { models: LanguageModel[]; tools: Record<string, Tool> }): FlowRunner {
-  const ask = async (prompt: string, signal: AbortSignal): Promise<string> => {
+  const ask = async (prompt: string, signal: AbortSignal, system = NODE_SYSTEM): Promise<string> => {
     const model = opts.models[0];
     if (!model) throw new Error("no model configured — add your API key in Settings");
-    const { text } = await generateText({ model, system: NODE_SYSTEM, prompt, abortSignal: signal, maxRetries: 1 });
+    const { text } = await generateText({ model, system, prompt, abortSignal: signal, maxRetries: 1 });
     return text.trim();
   };
 
@@ -307,10 +369,28 @@ export function flowRunner(opts: { models: LanguageModel[]; tools: Record<string
     runFlow(
       flow,
       {
-        runPrompt: (prompt, input, signal) => ask(fill(prompt, input), signal),
+        runPrompt: (prompt, input, signal, useMemory) =>
+          // Prompt nodes have no `recall` tool, so when memory is toggled on we
+          // fold the saved memories straight into the system prompt (loaded fresh
+          // per node so an earlier step's `remember` is visible to a later one).
+          ask(fill(prompt, input), signal, useMemory ? NODE_SYSTEM + memoryBlock() : NODE_SYSTEM),
         runIf: async (question, input, signal) => {
           const a = await ask(fill(`${question}\n\nAnswer with exactly "yes" or "no" and nothing else.`, input), signal);
           return /^\W*yes/i.test(a);
+        },
+        runSwitch: async (cases, input, signal) => {
+          const list = cases.length ? cases : ["else"];
+          const a = await ask(
+            fill(
+              `Classify the input into exactly one of these categories: ${list.join(", ")}. ` +
+                `Reply with only the category name, exactly as written. If none fit, reply "else".`,
+              input,
+            ),
+            signal,
+          );
+          // Take the model's answer if it names a real case; otherwise "else".
+          const clean = a.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+          return list.find((c) => clean.includes(c.toLowerCase())) ?? "else";
         },
         runTool: async (name, args, input) => {
           const t = opts.tools[name] as Tool & { execute?: (a: unknown, o: unknown) => Promise<unknown> };
@@ -318,7 +398,7 @@ export function flowRunner(opts: { models: LanguageModel[]; tools: Record<string
           const filled = Object.fromEntries(
             Object.entries(args)
               .filter(([k]) => k)
-              .map(([k, v]) => [k, coerce(fill(String(v), input))]),
+              .map(([k, v]) => [k, coerce(expandHome(subst(String(v), input)))]),
           );
           // Run the args through the tool's own schema — that's what applies
           // defaults (skipping it is why web_search once fired with type

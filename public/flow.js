@@ -71,6 +71,31 @@ function IfNode({ data, selected }) {
   );
 }
 
+// One output per case, plus an "else" catch-all. The runner follows the handle
+// whose id matches the label the model classified the input into.
+function SwitchNode({ data, selected }) {
+  const cases = [...(data.cases || []), "else"];
+  return h(
+    "div",
+    { className: shellCls(data, selected) },
+    h(Handle, { type: "target", position: Position.Left, style: dot }),
+    kindLabel(data, "switch"),
+    h("div", { className: "text-paper" }, excerpt(data.question) || "route by case"),
+    h(
+      "div",
+      { className: "mt-2 flex flex-col gap-2 items-end font-mono text-[10px]" },
+      cases.map((c, i) =>
+        h(
+          "div",
+          { key: c + i, className: "relative pr-1" },
+          h("span", { className: data._branch === c ? "text-done" : "text-dim" }, c),
+          h(Handle, { id: c, type: "source", position: Position.Right, style: { ...dot, top: "50%", right: -10 } }),
+        ),
+      ),
+    ),
+  );
+}
+
 function ToolNode({ data, selected }) {
   return h(
     "div",
@@ -101,7 +126,7 @@ function EndNode({ data }) {
   );
 }
 
-const nodeTypes = { start: StartNode, prompt: PromptNode, if: IfNode, tool: ToolNode, end: EndNode };
+const nodeTypes = { start: StartNode, prompt: PromptNode, if: IfNode, switch: SwitchNode, tool: ToolNode, end: EndNode };
 
 // ---- inspector -------------------------------------------------------------
 const field = "w-full bg-raise border border-line rounded-lg px-2 py-1.5 text-xs text-paper outline-none focus:border-dim";
@@ -129,6 +154,18 @@ function Inspector({ node, onChange, onDelete, toolNames, toolArgs }) {
         value: d.prompt || "",
         onChange: (e) => set({ prompt: e.target.value }),
       }),
+      // Off by default: keep steps deterministic. Flip on when a step needs to
+      // know things about the user (name, location, preferences).
+      h(
+        "label",
+        { key: "mem", className: "flex items-center gap-2 cursor-pointer text-[11px] text-dim" },
+        h("input", {
+          type: "checkbox",
+          checked: !!d.useMemory,
+          onChange: (e) => set({ useMemory: e.target.checked }),
+        }),
+        "Use saved memory",
+      ),
     );
 
   if (node.type === "if")
@@ -141,6 +178,34 @@ function Inspector({ node, onChange, onDelete, toolNames, toolArgs }) {
         onChange: (e) => set({ question: e.target.value }),
       }),
     );
+
+  if (node.type === "switch") {
+    const cases = d.cases || [];
+    rows.push(
+      h("textarea", {
+        key: "q",
+        className: field + " h-20 resize-none",
+        placeholder: "Optional: what to route on, e.g. “the kind of request”.",
+        value: d.question || "",
+        onChange: (e) => set({ question: e.target.value }),
+      }),
+      h("div", { key: "cl", className: "text-[10px] text-dim" }, "Cases — the model picks one; each is an output. “else” is automatic."),
+      ...cases.map((c, i) =>
+        h(
+          "div",
+          { key: "c" + i, className: "flex gap-1" },
+          h("input", {
+            className: field + " font-mono",
+            placeholder: "case label",
+            value: c,
+            onChange: (e) => set({ cases: cases.map((x, j) => (j === i ? e.target.value : x)) }),
+          }),
+          h("button", { className: btn, onClick: () => set({ cases: cases.filter((_, j) => j !== i) }) }, "×"),
+        ),
+      ),
+      h("button", { key: "add", className: btn, onClick: () => set({ cases: [...cases, ""] }) }, "+ case"),
+    );
+  }
 
   if (node.type === "tool") {
     const args = d.args || {};
@@ -313,7 +378,7 @@ function FlowsPage() {
         id: uid(),
         type,
         position: { x: 80 + ns.length * 60, y: 80 + ns.length * 90 },
-        data: type === "tool" ? { tool: "", args: {} } : {},
+        data: type === "tool" ? { tool: "", args: {} } : type === "switch" ? { cases: ["", ""] } : {},
       },
     ]);
 
@@ -392,6 +457,7 @@ function FlowsPage() {
         h("input", { className: field + " w-56", value: name, onChange: (e) => setName(e.target.value) }),
         h("button", { className: btn, onClick: () => add("prompt") }, "+ Prompt"),
         h("button", { className: btn, onClick: () => add("if") }, "+ If"),
+        h("button", { className: btn, onClick: () => add("switch") }, "+ Switch"),
         h("button", { className: btn, onClick: () => add("tool") }, "+ Tool"),
         h("button", { className: btn, onClick: () => add("end") }, "+ End"),
         h(
