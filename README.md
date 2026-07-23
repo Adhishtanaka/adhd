@@ -1,6 +1,7 @@
 # ADHD
 
 adhd is your own AI assistant that runs entirely on your machine. It plans, writes, researches, handles files, remembers what matters, and automates the things you do over and over, built for everyday work, not for writing code. 
+
 It runs on Bun, talks to DeepSeek through the AI SDK, and serves a ChatGPT-style web UI on 127.0.0.1. From a single chat box it reads and writes files, runs shell commands, searches and fetches the web, remembers facts across sessions, schedules tasks, and delegates work to subagents, with every tool call shown live as it happens. And when a task is worth repeating, you can draw it once as a visual Flow and run it on demand, on a schedule, or by asking in chat.
 
 ```
