@@ -56,7 +56,7 @@ flowchart TB
   subgraph server["Server — src/"]
     web["web.ts · Bun.serve<br/>SSE stream · chat / settings / flows routes · scheduler tick"]
     setup["setup.ts · buildAgent()<br/>assembles config + models + tools + prompt"]
-    agent["agent.ts · turn loop<br/>fallback chain · retries · history trim"]
+    agent["agent.ts · turn loop<br/>fallback chain · retries · history compaction"]
     tools["tools.ts<br/>files · shell · web_search · web_fetch"]
     flows["flows.ts<br/>graph runner · run_flow"]
     render["render.ts<br/>render_ui + component catalog"]
@@ -109,20 +109,22 @@ Text and tool calls stream together. Finished steps go into a per-turn buffer, s
 
 ```mermaid
 flowchart TD
-  msg(["Your message"]) --> push["push to history, trim to historyBudget"]
+  msg(["Your message"]) --> push["push to history · compact to historyBudget"]
+  push -. "over budget" .-> sum["summarize oldest messages<br/>into a running summary"]
+  sum --> push
   push --> stream["streamText — model emits text + tool calls"]
   stream --> q{"Tool call?"}
-  q -- yes --> run["run tool → buffer the step (pendingTurn)"]
+  q -- "yes" --> run["run tool → buffer the step (pendingTurn)"]
   run --> stream
-  q -- no --> done(["done — render markdown + rich blocks"])
+  q -- "no" --> done(["done — render markdown + rich blocks"])
   stream -. "rate limited" .-> next["retire model, move to next in chain"]
   next --> replay["replay pendingTurn as context"]
   replay --> stream
 ```
 
-Guards: `maxRetries: 0` (adhd owns retries, not the SDK), `stepCountIs(12)` max tool steps per turn, and history trimmed oldest-first while keeping tool-call/result pairs intact.
+Guards: `maxRetries: 0` (adhd owns retries, not the SDK), `stepCountIs(12)` max tool steps per turn, and history that's **compacted, not dropped** — when it outgrows `historyBudget` the oldest messages are summarized into a running summary (folded into the system prompt) instead of being discarded, so the model keeps the gist of the earlier conversation. Tool-call/result pairs stay intact either way.
 
-Long tool calls don't hold the turn open: a tool that blows its deadline hands back a "backgrounded" note so the UI goes idle and you can keep chatting. When the work lands, its result wakes the agent as a fresh turn.
+Long tool calls don't hold the turn open: a tool that blows its deadline hands back a "backgrounded" note so the UI goes idle and you can keep chatting. When the work lands, its result wakes the agent as a fresh turn — and several jobs finishing close together are coalesced into a single turn, so a burst of backgrounded fetches produces one reply, not one per job.
 
 ## Flows
 
@@ -136,9 +138,9 @@ Data flows along the edges: each node takes the previous node's output as its in
 flowchart LR
   s(["Start"]) --> t["Tool<br/>web_search"]
   t --> sw{"Switch<br/>sentiment"}
-  sw -- positive --> p["Prompt<br/>thank them"]
-  sw -- negative --> n["Prompt<br/>apologize + refund"]
-  sw -- else --> o["Prompt<br/>acknowledge"]
+  sw -- "positive" --> p["Prompt<br/>thank them"]
+  sw -- "negative" --> n["Prompt<br/>apologize + refund"]
+  sw -- "else" --> o["Prompt<br/>acknowledge"]
   p --> e(["End"])
   n --> e
   o --> e
@@ -151,6 +153,19 @@ flowchart LR
 | **If** | Asks the model a yes/no question about the input and follows the matching edge. |
 | **Switch** | Multi-way branch: the model sorts the input into one of your named cases (plus an automatic `else`) and follows that case's edge. Each case is its own output handle. |
 | **Tool** | Runs exactly one tool. Argument fields are read straight from the tool's own schema — required fields marked, defaults applied, enums become dropdowns. Shell tools still ask for approval. |
+| **Merge** | Fan-in: wire several nodes into it and it **waits for all of them**, then joins their outputs into labeled sections (`## 1`, `## 2`, …) for the next node — usually a Prompt. The counterpart to fan-out, where one node feeds several. |
+
+A node with several outgoing edges **fans out** — every branch runs — and a **Merge** node fans them back in. This is what a "combine a few tool outputs, then write one report" flow looks like:
+
+```mermaid
+flowchart LR
+  s(["Start"]) --> a["Tool<br/>web_fetch · news"]
+  s --> b["Tool<br/>web_fetch · weather"]
+  a --> m["Merge<br/>combine inputs"]
+  b --> m
+  m --> p["Prompt<br/>write daily report"]
+  p --> e(["End"])
+```
 
 Runs stream over the same SSE channel as chat: each node lights up, reports its duration, and logs its output. A run can be **paused, resumed, or stopped** mid-flight. A built-in 30-step cap stops any accidental cycle instead of hanging.
 
