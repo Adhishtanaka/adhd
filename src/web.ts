@@ -128,10 +128,10 @@ async function runTurn(message: string) {
   } finally {
     busy = false;
     broadcast("busy", { busy: false });
-    // A job may have landed while this turn was running — pick it up now that
-    // the agent is free. setTimeout, not a direct call, so the next turn starts
-    // on a clean stack rather than nested inside this one's finally.
-    setTimeout(drainJobs, 0);
+    // A job may have landed while this turn was running — pick it up now that the
+    // agent is free. Debounced (not a direct call) so any siblings still landing
+    // coalesce into the same next turn, and it runs on a clean stack.
+    scheduleDrain();
   }
 }
 
@@ -140,22 +140,41 @@ async function runTurn(message: string) {
 // goes idle and the user can keep chatting. Its result arrives here later and is
 // replayed to the agent as a new turn — one at a time, never while it's busy.
 const finishedJobs: FinishedJob[] = [];
+// Coalesce completions that land close together into ONE turn. Backgrounding N
+// fetches used to wake the agent N times → N near-duplicate replies stacked under
+// the answer. A short trailing debounce lets a burst of finishes drain together.
+const DRAIN_DEBOUNCE_MS = 1000;
+let drainTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleDrain() {
+  if (drainTimer) clearTimeout(drainTimer);
+  drainTimer = setTimeout(() => {
+    drainTimer = null;
+    drainJobs();
+  }, DRAIN_DEBOUNCE_MS);
+}
 setJobSinks(
   (j) => {
     finishedJobs.push(j);
     broadcast("info", { message: `[${j.id}] ${j.label} — finished after ${j.seconds}s` });
-    drainJobs();
+    scheduleDrain();
   },
   (id, label) => broadcast("info", { message: `[${id}] ${label} — still running, continuing in the background` }),
 );
 function drainJobs() {
   if (busy || !finishedJobs.length || !built.hasKey()) return;
-  const j = finishedJobs.shift()!;
-  broadcast("notify", { title: "Background task finished", body: j.label });
+  const jobs = finishedJobs.splice(0); // take every finished job — one turn, not one each
+  broadcast("notify", { title: "Background task finished", body: jobs.map((j) => j.label).join(", ") });
+  const results = jobs
+    .map((j) => `[job ${j.id} "${j.label}" — finished in ${j.seconds}s]\n${j.result}`)
+    .join("\n\n---\n\n");
+  const lead =
+    jobs.length === 1
+      ? `A background job you started earlier just finished.`
+      : `${jobs.length} background jobs you started earlier just finished.`;
   void runTurn(
-    `[background job ${j.id} finished — "${j.label}", took ${j.seconds}s]\n\n${j.result}\n\n` +
-      `This is the result of the tool call you backgrounded earlier. Do not re-run that work. ` +
-      `Continue from here and give the user the answer they were waiting for.`,
+    `${lead} These are the results of tool calls you backgrounded — do not re-run that work.\n\n${results}\n\n` +
+      `Fold them into the answer the user was waiting for, in ONE short reply. If the results add nothing ` +
+      `beyond what you already told the user, end your turn with no message rather than repeating yourself.`,
   );
 }
 
@@ -178,7 +197,7 @@ async function runFlowById(id: string): Promise<void> {
     currentRun = null;
     busy = false;
     broadcast("busy", { busy: false });
-    setTimeout(drainJobs, 0);
+    scheduleDrain();
   }
 }
 
