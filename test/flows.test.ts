@@ -241,6 +241,45 @@ test("a cycle stops at the step cap instead of hanging", async () => {
   expect(ex.seen.length).toBe(30);
 });
 
+test("fan-out runs every branch; a merge waits for all, then joins labeled sections", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "merge",
+    nodes: [
+      node("s", "start"),
+      node("a", "tool", { tool: "web_fetch" }),
+      node("b", "tool", { tool: "web_fetch" }),
+      node("m", "merge"),
+      node("p", "prompt", { prompt: "report" }),
+    ],
+    edges: [edge("s", "a"), edge("s", "b"), edge("a", "m"), edge("b", "m"), edge("m", "p")],
+  };
+  const ex = stub();
+  const out = await runFlow(flow, ex);
+  expect(ex.seen.filter((x) => x.startsWith("tool:web_fetch")).length).toBe(2); // both ran
+  expect(out).toContain("## 1 · web_fetch"); // merged into two labeled sections…
+  expect(out).toContain("## 2 · web_fetch");
+  expect(out).toContain(">report"); // …and the prompt saw that merged input
+});
+
+test("a merge behind a pruned if branch still fires with the inputs it got", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "partial-merge",
+    nodes: [
+      node("q", "if", { question: "?" }),
+      node("y", "prompt", { prompt: "Y" }),
+      node("n", "prompt", { prompt: "N" }),
+      node("m", "merge"),
+    ],
+    edges: [edge("q", "y", "yes"), edge("q", "n", "no"), edge("y", "m"), edge("n", "m")],
+  };
+  const ex = stub(); // runIf → true, so only y feeds the merge; n is pruned
+  const out = await runFlow(flow, ex);
+  expect(out).toContain("## 1 · Y");
+  expect(ex.seen).not.toContain("prompt:N");
+});
+
 test("entry is the node nothing points at, whatever the array order", async () => {
   const flow: Flow = {
     id: "f",

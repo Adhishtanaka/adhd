@@ -13,7 +13,7 @@ import { loadMemories } from "./memory.js";
 // position and any extra canvas fields ride along untouched.
 export const FLOWS_FILE = join(HOME_ROOT, "flows.json");
 
-export type NodeKind = "start" | "prompt" | "if" | "switch" | "tool" | "end";
+export type NodeKind = "start" | "prompt" | "if" | "switch" | "tool" | "merge" | "end";
 export type FlowNode = {
   id: string;
   type: NodeKind;
@@ -252,6 +252,7 @@ const label = (n: FlowNode): string => {
   if (n.type === "end") return "end";
   if (n.type === "if") return n.data.question || "(empty)";
   if (n.type === "switch") return n.data.question || `switch: ${(n.data.cases ?? []).join(" / ") || "(no cases)"}`;
+  if (n.type === "merge") return "merge";
   return n.data.prompt || "(empty)";
 };
 
@@ -266,68 +267,111 @@ export async function runFlow(
   emit: (e: FlowEvent) => void = () => {},
   ctl: RunControl = new RunControl(),
 ): Promise<string> {
-  let node = entryNode(flow);
-  if (!node) return "(empty flow)";
-  let out = "";
+  const entry = entryNode(flow);
+  if (!entry) return "(empty flow)";
+  const nodeById = new Map(flow.nodes.map((n) => [n.id, n]));
+
+  // Incoming-edge count per node. A merge waits for ALL of its incoming edges
+  // before firing; every other node fires on the first input that reaches it
+  // (which is what keeps if/switch branches converging on one node working).
+  const inCount = new Map<string, number>();
+  for (const e of flow.edges) inCount.set(e.target, (inCount.get(e.target) ?? 0) + 1);
+
+  // Inputs that have arrived on a node's incoming edges but not yet consumed.
+  const received = new Map<string, { label: string; output: string }[]>();
+  const queue: FlowNode[] = [entry];
+  let result = "";
+
+  const deliver = (targetId: string, srcLabel: string, output: string) => {
+    const arr = received.get(targetId) ?? [];
+    arr.push({ label: srcLabel, output });
+    received.set(targetId, arr);
+    const target = nodeById.get(targetId);
+    if (!target) return;
+    const need = target.type === "merge" ? inCount.get(targetId) ?? 1 : 1;
+    if (arr.length >= need) queue.push(target);
+  };
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    // The edge handle to leave by. undefined = a plain node with one way out;
+    if (!queue.length) {
+      // Queue drained. A merge behind a pruned if/switch branch may be holding
+      // partial inputs that will never complete — fire it with what it has so
+      // the run finishes instead of silently dropping them.
+      const stuck = flow.nodes.find(
+        (n) => n.type === "merge" && (received.get(n.id)?.length ?? 0) > 0,
+      );
+      if (!stuck) {
+        emit({ type: "run-done", output: result });
+        return result;
+      }
+      queue.push(stuck);
+    }
+    const node = queue.shift()!;
+
+    // Consume this node's arrived inputs. A merge joins them into labeled
+    // sections so a downstream prompt can tell the sources apart; any other
+    // node takes the most recent input, as before.
+    const ins = received.get(node.id) ?? [];
+    received.set(node.id, []);
+    const input =
+      node.type === "merge"
+        ? ins.map((r, i) => `## ${i + 1} · ${r.label}\n${r.output}`).join("\n\n")
+        : ins[ins.length - 1]?.output ?? "";
+
+    // The edge handle to leave by. undefined = fan out to every out-edge;
     // set = a branch (if → "yes"/"no", switch → a case label).
     let branch: string | undefined;
+    let out = input;
     const started = Date.now();
     try {
       await ctl.gate();
       emit({ type: "node-start", id: node.id, kind: node.type, label: label(node) });
       switch (node.type) {
         case "start":
-          break; // marks the entry; carries no work
+        case "merge":
+          break; // start marks the entry; merge's output IS the joined input
         case "end":
-          emit({ type: "node-done", id: node.id, ms: Date.now() - started, output: out });
-          emit({ type: "run-done", output: out });
-          return out;
+          emit({ type: "node-done", id: node.id, ms: Date.now() - started, output: input });
+          emit({ type: "run-done", output: input });
+          return input;
         case "prompt":
-          out = await ex.runPrompt(node.data.prompt ?? "", out, ctl.signal, !!node.data.useMemory);
+          out = await ex.runPrompt(node.data.prompt ?? "", input, ctl.signal, !!node.data.useMemory);
           break;
         case "if":
-          branch = (await ex.runIf(node.data.question ?? "", out, ctl.signal)) ? "yes" : "no";
+          branch = (await ex.runIf(node.data.question ?? "", input, ctl.signal)) ? "yes" : "no";
           break;
         case "switch":
-          branch = await ex.runSwitch(node.data.cases ?? [], out, ctl.signal);
+          branch = await ex.runSwitch(node.data.cases ?? [], input, ctl.signal);
           break;
         case "tool":
-          out = await ex.runTool(node.data.tool ?? "", node.data.args ?? {}, out);
+          out = await ex.runTool(node.data.tool ?? "", node.data.args ?? {}, input);
           break;
         default:
           throw new Error(`unknown node type "${(node as FlowNode).type}"`);
       }
+      result = out;
       emit({ type: "node-done", id: node.id, ms: Date.now() - started, output: out, branch });
     } catch (e) {
       const message = (e as Error)?.message ?? String(e);
       if (message === CANCELLED || ctl.state === "stopped") {
         emit({ type: "run-stopped" });
-        return out;
+        return result;
       }
       // One bad node ends the run — continuing would feed garbage downstream.
       emit({ type: "node-error", id: node.id, ms: Date.now() - started, message });
-      emit({ type: "run-done", output: out });
+      emit({ type: "run-done", output: result });
       return `${node.id} failed: ${message}`;
     }
 
-    const from = flow.edges.filter((e) => e.source === node!.id);
-    // Plain node: first edge out. Branch node: the edge whose handle matches the
-    // chosen label ("yes"/"no" or a case), falling back to an "else" edge.
-    const next =
-      branch === undefined
-        ? from.find((e) => (e.sourceHandle ?? "yes") === "yes") ?? from[0]
-        : from.find((e) => (e.sourceHandle ?? "yes") === branch) ?? from.find((e) => e.sourceHandle === "else");
-    const target = next && flow.nodes.find((n) => n.id === next.target);
-    if (!target) {
-      emit({ type: "run-done", output: out });
-      return out;
-    }
-    node = target;
+    const from = flow.edges.filter((e) => e.source === node.id);
+    // Plain node: every out-edge (fan-out). Branch node: the edges whose handle
+    // matches the chosen label ("yes"/"no" or a case), falling back to "else".
+    const matched = branch === undefined ? from : from.filter((e) => (e.sourceHandle ?? "yes") === branch);
+    const live = branch !== undefined && !matched.length ? from.filter((e) => e.sourceHandle === "else") : matched;
+    const lbl = label(node);
+    for (const e of live) deliver(e.target, lbl, out);
   }
-  const capped = `${out}\n\n(stopped at the ${MAX_STEPS}-step cap — check for a cycle)`;
+  const capped = `${result}\n\n(stopped at the ${MAX_STEPS}-step cap — check for a cycle)`;
   emit({ type: "run-done", output: capped });
   return capped;
 }

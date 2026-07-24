@@ -107,6 +107,19 @@ function ToolNode({ data, selected }) {
   );
 }
 
+// Fan-in: many edges land on the target handle; the runner waits for all of
+// them, joins their outputs into labeled sections, and passes the result on.
+function MergeNode({ data, selected }) {
+  return h(
+    "div",
+    { className: shellCls(data, selected) },
+    h(Handle, { type: "target", position: Position.Left, style: dot }),
+    kindLabel(data, "merge"),
+    h("div", { className: "text-paper" }, "combine inputs"),
+    h(Handle, { type: "source", position: Position.Right, style: dot }),
+  );
+}
+
 // Start/End are markers: Start is where the run begins, End stops it. They make
 // the entry point explicit instead of "whichever node nothing points at".
 function StartNode({ data }) {
@@ -126,7 +139,7 @@ function EndNode({ data }) {
   );
 }
 
-const nodeTypes = { start: StartNode, prompt: PromptNode, if: IfNode, switch: SwitchNode, tool: ToolNode, end: EndNode };
+const nodeTypes = { start: StartNode, prompt: PromptNode, if: IfNode, switch: SwitchNode, tool: ToolNode, merge: MergeNode, end: EndNode };
 
 // ---- inspector -------------------------------------------------------------
 const field = "w-full bg-raise border border-line rounded-lg px-2 py-1.5 text-xs text-paper outline-none focus:border-dim";
@@ -206,6 +219,12 @@ function Inspector({ node, onChange, onDelete, toolNames, toolArgs }) {
       h("button", { key: "add", className: btn, onClick: () => set({ cases: [...cases, ""] }) }, "+ case"),
     );
   }
+
+  if (node.type === "merge")
+    rows.push(
+      h("p", { key: "m", className: "text-[11px] text-dim" },
+        "Wire several nodes into this one. It waits for all of them, then joins their outputs into labeled sections (## 1, ## 2, …) for the next node — usually a prompt."),
+    );
 
   if (node.type === "tool") {
     const args = d.args || {};
@@ -459,6 +478,7 @@ function FlowsPage() {
         h("button", { className: btn, onClick: () => add("if") }, "+ If"),
         h("button", { className: btn, onClick: () => add("switch") }, "+ Switch"),
         h("button", { className: btn, onClick: () => add("tool") }, "+ Tool"),
+        h("button", { className: btn, onClick: () => add("merge") }, "+ Merge"),
         h("button", { className: btn, onClick: () => add("end") }, "+ End"),
         h(
           "div",
