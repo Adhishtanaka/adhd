@@ -229,8 +229,15 @@ export function builtinTools(): Record<string, Tool> {
       description: "Find files by glob pattern (e.g. '**/*.md', 'src/**/*.ts', '*.pdf'). Returns matching paths under cwd.",
       inputSchema: z.object({ pattern: z.string(), cwd: z.string().default(".") }),
       execute: async ({ pattern, cwd }) => {
+        // Bun.Glob is native + cross-platform but has no ignore option, so we
+        // drop node_modules/.git here — otherwise they'd fill the 500 cap and
+        // bury the real matches. ponytail: string filter, not a pruned walk;
+        // the native walk is fast enough that skipping the descent isn't worth
+        // rebuilding a custom walker.
+        const skip = /(^|\/)(node_modules|\.git)\//;
         const hits: string[] = [];
         for (const p of new Bun.Glob(pattern).scanSync({ cwd })) {
+          if (skip.test(p)) continue;
           hits.push(p);
           if (hits.length >= 500) break;
         }
