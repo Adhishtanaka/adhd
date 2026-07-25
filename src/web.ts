@@ -272,40 +272,70 @@ function settingsFragment(): string {
   // Appearance + Notifications are client-only (theme in localStorage, notif
   // permission in the browser); app.js wires #appearance-select / #notif-toggle
   // on each settings swap. Everything else is server state via HTMX fragments.
-  return `
-    <h2>Appearance</h2>
-    <div class="settings-section">
-      <div class="row">
-        <span>Theme</span>
-        <select id="appearance-select">
-          <option value="system">System</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
+  //
+  // Nine flat sections was one long scroll, so they're grouped by the question
+  // each answers. <details> gives collapse with no JS and keyboard support for
+  // free; only the group you most often come here to change starts open. A swap
+  // of #settings re-renders this, so open/closed resets to these defaults.
+  const group = (title: string, note: string, body: string, open = false): string =>
+    `<details class="settings-group"${open ? " open" : ""}>
+      <summary>${title}${note ? ` <span class="muted">${note}</span>` : ""}</summary>
+      ${body}
+    </details>`;
+
+  const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+
+  return (
+    group(
+      "Keys",
+      "the model and web search",
+      `<p class="muted">Stored in <span class="mono">~/.adhd/secrets.json</span> (chmod 600). Keys never leave this machine.</p>
+      <div class="settings-section">${keyRows}</div>`,
+      true,
+    ) +
+    group(
+      "What adhd may do",
+      `${n(allowedRoots().length, "folder")} · ${n(allowedCommands().length, "command")} · ${n(Object.keys(mcpServers()).length, "server")}`,
+      `<h2>Local folders <span class="muted">(files adhd may read)</span></h2>
+      <div class="settings-section"><div id="roots">${rootsFragment()}</div></div>
+      <h2>Always-allowed commands <span class="muted">(run without asking)</span></h2>
+      <div class="settings-section"><div id="allowed">${allowedFragment()}</div></div>
+      <h2>MCP servers <span class="muted">(extra tools)</span></h2>
+      <div class="settings-section"><div id="mcp">${mcpFragment()}</div></div>`,
+    ) +
+    group(
+      "What adhd remembers",
+      `${n(built.memoryIds.length, "memory", "memories")} · ${n(loadSchedule().length, "task")}`,
+      `<h2>Memory</h2>
+      <div class="settings-section"><div id="mem">${memoryFragment()}</div></div>
+      <h2>Schedule</h2>
+      <div class="settings-section"><div id="sched">${scheduleFragment()}</div></div>`,
+    ) +
+    group(
+      "App",
+      "appearance, notifications, blocked pages",
+      `<h2>Appearance</h2>
+      <div class="settings-section">
+        <div class="row">
+          <span>Theme</span>
+          <select id="appearance-select">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
       </div>
-    </div>
-    <h2>API keys</h2>
-    <p class="muted">Stored in <span class="mono">~/.adhd/secrets.json</span> (chmod 600). Keys never leave this machine.</p>
-    <div class="settings-section">${keyRows}</div>
-    <h2>Memory <span class="muted">(${built.memoryIds.length ? "" : "none yet"})</span></h2>
-    <div class="settings-section"><div id="mem">${memoryFragment()}</div></div>
-    <h2>Schedule</h2>
-    <div class="settings-section"><div id="sched">${scheduleFragment()}</div></div>
-    <h2>Local folders <span class="muted">(files adhd may read)</span></h2>
-    <div class="settings-section"><div id="roots">${rootsFragment()}</div></div>
-    <h2>Always-allowed commands <span class="muted">(run without asking)</span></h2>
-    <div class="settings-section"><div id="allowed">${allowedFragment()}</div></div>
-    <h2>MCP servers <span class="muted">(extra tools)</span></h2>
-    <div class="settings-section"><div id="mcp">${mcpFragment()}</div></div>
-    <h2>Notifications</h2>
-    <div class="settings-section">
-      <div class="row">
-        <span>Notify when a scheduled task runs</span>
-        <label class="switch"><input type="checkbox" id="notif-toggle" /><span class="track"></span></label>
+      <h2>Notifications</h2>
+      <div class="settings-section">
+        <div class="row">
+          <span>Notify when a scheduled task runs</span>
+          <label class="switch"><input type="checkbox" id="notif-toggle" /><span class="track"></span></label>
+        </div>
       </div>
-    </div>
-    <h2>Blocked pages <span class="muted">(fetch failures)</span></h2>
-    <div class="settings-section"><div id="fails">${failuresFragment()}</div></div>`;
+      <h2>Blocked pages <span class="muted">(fetch failures)</span></h2>
+      <div class="settings-section"><div id="fails">${failuresFragment()}</div></div>`,
+    )
+  );
 }
 
 function rootsFragment(): string {

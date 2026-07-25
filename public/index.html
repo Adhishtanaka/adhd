@@ -147,6 +147,17 @@
       /* settings */
       .settings h2 { font-family: var(--font-display); color: rgb(var(--c-text-dim)); font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; margin-top: 1.4rem; margin-bottom: 0.5rem; }
       .settings h2:first-child { margin-top: 0; }
+      /* collapsible group — native <details>, so no JS and keyboard support for free */
+      .settings-group { border-bottom: 1px solid rgb(var(--c-border)); padding-bottom: 0.8rem; margin-bottom: 0.8rem; }
+      .settings-group:last-of-type { border-bottom: none; margin-bottom: 0; }
+      .settings-group > summary { font-family: var(--font-display); font-size: 13px; font-weight: 600; cursor: pointer; padding: 0.35rem 0; margin-bottom: 0.4rem; display: flex; align-items: baseline; gap: 0.5rem; list-style: none; }
+      .settings-group > summary::-webkit-details-marker { display: none; }
+      .settings-group > summary::after { content: "⌄"; margin-left: auto; color: rgb(var(--c-text-dim)); line-height: 1; }
+      .settings-group:not([open]) > summary::after { content: "›"; }
+      .settings-group > summary:focus-visible { outline: 2px solid rgb(var(--c-accent)); outline-offset: 2px; border-radius: 6px; }
+      .settings-group > summary .muted { font-weight: 400; font-size: 11px; }
+      .settings-group h2:first-of-type { margin-top: 0; }
+      .settings-group > p.muted:first-of-type { margin-top: 0; }
       /* grouped card section, ChatGPT-style — rows sit inside, label above */
       .settings-section { background: rgb(var(--c-surface)); border: 1px solid rgb(var(--c-border)); border-radius: 14px; padding: 0 0.9rem; margin-bottom: 0.4rem; }
       .settings .row { display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; padding: 0.65rem 0; border-bottom: 1px solid rgb(var(--c-border)); }
