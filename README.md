@@ -40,7 +40,7 @@ Add your DeepSeek key in **Settings** (or drop it in `.env` first — see [Confi
 - **Delegates** big self-contained subtasks to subagents, or grinds a hard task across passes with `loop_task`.
 - **Light, dark, and system** themes.
 
-Anything that changes your machine (`bash`, `powershell`, `run_script`) asks for a yes/no in the UI first — including inside subagents, Flows, and scheduled runs. Approving with "always allow" remembers that exact command.
+Anything that changes your machine (`bash`, `powershell`, `run_script`) asks for a yes/no in the UI first — including inside subagents, Flows, and scheduled runs. Approving with "always allow" remembers that *program* (`bash:git`), never a whole command line, and is offered only for a single plain command — anything that could smuggle a second one (`ls && rm -rf ~`) is one-time approval only. A prompt nobody answers within 5 minutes declines itself, so a scheduled run that fires while you're away fails safely instead of hanging.
 
 ## Architecture
 
