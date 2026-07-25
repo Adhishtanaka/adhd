@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { marked } from "marked";
 import { buildAgent } from "./setup.js";
-import { setBashConfirm, setAskUser } from "./tools.js";
+import { setBashConfirm, setAskUser, orAfter } from "./tools.js";
 import { setSubagentSink } from "./subagent.js";
 import { setRenderSink } from "./render.js";
 import { sanitize } from "./sanitize.js";
@@ -47,23 +47,48 @@ const pending = new Map<string, (v: unknown) => void>();
 // token → the allowKey this prompt may grant. Kept server-side so "always allow"
 // can only ever store the key WE derived, not whatever the page posts back.
 const pendingAllowKey = new Map<string, string>();
-setBashConfirm(
-  ({ command, explain, allowKey }) =>
-    new Promise<boolean>((resolve) => {
-      const token = crypto.randomUUID();
-      pending.set(token, (v) => resolve(!!v));
-      if (allowKey) pendingAllowKey.set(token, allowKey);
-      broadcast("confirm", { token, command, explain, allowKey });
-    }),
-);
-setAskUser(
-  (question, options) =>
-    new Promise<string>((resolve) => {
-      const token = crypto.randomUUID();
-      pending.set(token, (v) => resolve(String(v ?? options[0] ?? "")));
-      broadcast("ask", { token, question, options });
-    }),
-);
+
+// A prompt nobody answers must not hold the turn open forever. An unattended run
+// (a scheduled task, a Flow) broadcasts its confirm to whatever SSE clients exist
+// — possibly none, since broadcast is fire-and-forget and a reconnecting page
+// never sees the missed event. Without a deadline `busy` would stay true for good,
+// and the scheduler tick skips every fire while busy: adhd wedged until restart.
+// ponytail: timeout → the safe answer. Parking the ask so it can be answered later
+// (an inbox) is the upgrade if unattended runs ever need to *complete* rather than
+// just fail safely.
+const APPROVAL_TIMEOUT = 5 * 60_000;
+
+// Drop a prompt's server-side state and tell the transcript why. Called only on
+// timeout; an answered prompt is cleaned up by the /confirm and /ask routes.
+function expire(token: string, note: string): void {
+  pending.delete(token);
+  pendingAllowKey.delete(token);
+  broadcast("info", { message: note });
+}
+
+setBashConfirm(({ command, explain, allowKey }) => {
+  const token = crypto.randomUUID();
+  const answered = new Promise<boolean>((resolve) => {
+    pending.set(token, (v) => resolve(!!v));
+    if (allowKey) pendingAllowKey.set(token, allowKey);
+    broadcast("confirm", { token, command, explain, allowKey });
+  });
+  // Unanswered means declined — the same default tools.ts uses when headless.
+  return orAfter(answered, APPROVAL_TIMEOUT, false, () =>
+    expire(token, "no answer in 5 min — command declined"),
+  );
+});
+setAskUser((question, options) => {
+  const token = crypto.randomUUID();
+  const fallback = options[0] ?? "";
+  const answered = new Promise<string>((resolve) => {
+    pending.set(token, (v) => resolve(String(v ?? fallback)));
+    broadcast("ask", { token, question, options });
+  });
+  return orAfter(answered, APPROVAL_TIMEOUT, fallback, () =>
+    expire(token, `no answer in 5 min — using "${fallback}"`),
+  );
+});
 setSubagentSink((line) => broadcast("sub", { line }));
 // Text nodes carry markdown (bold, lists, inline code). Render it to safe HTML
 // here — reusing the same marked+sanitize path as assistant prose — so the

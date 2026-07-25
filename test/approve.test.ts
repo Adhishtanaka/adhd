@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { allowKeyFor } from "../src/tools.js";
+import { allowKeyFor, orAfter } from "../src/tools.js";
 
 test("plain commands yield a runner-scoped program key", () => {
   expect(allowKeyFor("bash", "git status")).toBe("bash:git");
@@ -27,4 +27,21 @@ test("anything that can smuggle a second command is not blanket-allowable", () =
 
 test("bash:git does not grant pwsh:git", () => {
   expect(allowKeyFor("pwsh", "git status")).not.toBe(allowKeyFor("bash", "git status"));
+});
+
+// A prompt nobody answers used to hang forever, which left `busy` stuck true and
+// wedged the scheduler (it skips every tick while busy). Unanswered must settle.
+test("an unanswered prompt settles to the fallback and cleans up", async () => {
+  let cleaned = false;
+  const never = new Promise<boolean>(() => {});
+  expect(await orAfter(never, 5, false, () => (cleaned = true))).toBe(false);
+  expect(cleaned).toBe(true);
+});
+
+test("an answered prompt keeps its answer and never expires", async () => {
+  let cleaned = false;
+  const yes = Promise.resolve(true);
+  expect(await orAfter(yes, 5, false, () => (cleaned = true))).toBe(true);
+  await new Promise((r) => setTimeout(r, 20)); // past the deadline it must not fire
+  expect(cleaned).toBe(false);
 });

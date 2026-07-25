@@ -44,6 +44,20 @@ export function setBashConfirm(fn: Confirm) {
 // Reuse the same prompt for any action that needs approval (e.g. loop_task).
 export const confirmAction = (message: string): Promise<boolean> => confirmBash({ command: message });
 
+// Resolve to `fallback` if `p` hasn't settled within `ms`, running `onTimeout`
+// first so the caller can clean up whatever it was waiting on. The timer is
+// always cleared, so a settled race never holds the process open.
+export function orAfter<T>(p: Promise<T>, ms: number, fallback: T, onTimeout: () => void): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<T>((resolve) => {
+    timer = setTimeout(() => {
+      onTimeout();
+      resolve(fallback);
+    }, ms);
+  });
+  return Promise.race([p, expired]).finally(() => clearTimeout(timer));
+}
+
 // "Always allow" grants a PROGRAM, never a command line. A line with shell
 // operators can hide a second program behind an allowed name (`ls && rm -rf ~`),
 // so anything but a single plain command gets one-time approval only — null here
