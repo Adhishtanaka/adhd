@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@ai-sdk/deepseek": "^1.0.20",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "ai": "^5",
     "marked": "^15",
     "zod": "^3"

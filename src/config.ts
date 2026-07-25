@@ -3,6 +3,8 @@ import { join, sep } from "node:path";
 import { homedir } from "node:os";
 import { createDeepSeek } from "@ai-sdk/deepseek";
 import type { LanguageModel } from "ai";
+// Type-only, so this doesn't create a runtime cycle with mcp.ts (which reads config).
+import type { McpServer } from "./mcp.js";
 
 export const HOME_ROOT = join(homedir(), ".adhd");
 export const PROJECT_ROOT = join(process.cwd(), ".adhd");
@@ -16,6 +18,7 @@ export type Config = {
   systemPrompt?: string;
   localRoots?: string[]; // folders the local-file tools may read (default: home)
   allowedCommands?: string[]; // "always allow" keys, e.g. "bash:git" (see tools.allowKeyFor)
+  mcpServers?: Record<string, McpServer>; // stdio MCP servers to load tools from (see mcp.ts)
 };
 
 // Current DeepSeek API models (both 1M context, tool calls, thinking by default).
@@ -165,4 +168,15 @@ export function setAllowedCommands(list: string[]): void {
   const path = join(HOME_ROOT, "config.json");
   mkdirSync(HOME_ROOT, { recursive: true });
   writeFileSync(path, JSON.stringify({ ...readJson(path), allowedCommands: list }, null, 2));
+}
+
+// --- MCP servers ------------------------------------------------------------
+export function mcpServers(): Record<string, McpServer> {
+  return loadConfig().mcpServers ?? {};
+}
+
+export function setMcpServers(servers: Record<string, McpServer>): void {
+  const path = join(HOME_ROOT, "config.json");
+  mkdirSync(HOME_ROOT, { recursive: true });
+  writeFileSync(path, JSON.stringify({ ...readJson(path), mcpServers: servers }, null, 2));
 }

@@ -3,6 +3,7 @@ import type { Tool } from "ai";
 import type { LanguageModel } from "ai";
 import { loadConfig, resolveModels, setUserModel, type Config } from "./config.js";
 import { builtinTools, loadUserTools } from "./tools.js";
+import { loadMcpTools } from "./mcp.js";
 import { loadSkills, skillsPromptSection, useSkillTool } from "./skills.js";
 import { loadMemories, memoryPromptSection, memoryTools } from "./memory.js";
 import { scheduleTools } from "./scheduler.js";
@@ -89,6 +90,7 @@ export async function buildAgent(): Promise<Built> {
     ...memoryTools(),
     ...scheduleTools(),
     ...(await loadUserTools()),
+    ...(await loadMcpTools()),
   };
   const system =
     (config.systemPrompt || BASE_SYSTEM) +

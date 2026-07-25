@@ -60,16 +60,21 @@ flowchart TB
     tools["tools.ts<br/>files · shell · web_search · web_fetch"]
     flows["flows.ts<br/>graph runner · run_flow"]
     render["render.ts<br/>render_ui + component catalog"]
+    mcp["mcp.ts<br/>MCP servers · foreign tools, approval-gated"]
     extra["memory.ts · skills.ts · scheduler.ts<br/>subagent.ts · loop.ts · failcache.ts"]
     san["sanitize.ts<br/>strips injection vectors"]
   end
+
+  srv[["MCP servers<br/>stdio child processes"]]
 
   ui -- "POST /chat" --> web
   flow -- "POST /flows · /flows/run · /flows/control" --> web
   web -- "SSE: text · tool-call · render_ui · flow · done" --> ui
   web --> setup
   setup --> agent
+  mcp -- "stdio · connects at startup, then calls tools" --> srv
   agent --> tools
+  agent --> mcp
   agent --> extra
   agent --> render
   agent --> flows
@@ -199,6 +204,8 @@ Example Flows (Morning brief, Umbrella check, File → todo list) are seeded **o
 
 Flow **tool nodes** get the same file/shell/web tools (minus `spawn_agent` / `loop_task` / `run_flow`, so a Flow can't recurse into another). Flow **prompt nodes** get no tools at all.
 
+Tools from [MCP](https://modelcontextprotocol.io) servers join this list at startup as `<server>_<tool>` — see [Extending](#extending).
+
 ## Configuration
 
 ### Environment
@@ -226,7 +233,10 @@ Merged from `~/.adhd/config.json`, then `./.adhd/config.json` (project wins). Al
   "historyBudget": 60000,        // max chars of chat history per request (~4 chars/token)
   "systemPrompt": "...",         // replaces BASE_SYSTEM
   "localRoots": ["/path/..."],   // folders the local-file tools may read (default: home)
-  "allowedCommands": ["bash:git"]// "always allow" keys added via the approval prompt
+  "allowedCommands": ["bash:git"],// "always allow" keys added via the approval prompt
+  "mcpServers": {                // stdio MCP servers; their tools load at startup
+    "notes": { "command": "npx", "args": ["-y", "@some/notes-mcp"], "trust": "ask" }
+  }
 }
 ```
 
@@ -246,6 +256,11 @@ Merged from `~/.adhd/config.json`, then `./.adhd/config.json` (project wins). Al
 
 - **Tools:** drop `~/.adhd/tools/<name>.ts` that default-exports an AI SDK `tool()` — the filename becomes the tool name, and it's available in chat and as a Flow tool node.
 - **Skills:** add `~/.adhd/skills/<name>/SKILL.md` with `name` and `description` frontmatter; the model loads the body on demand with `use_skill`.
+- **MCP servers:** add one in **Settings → MCP servers** (name, command, arguments, and a read-only tick), or write the `mcpServers` entry in `config.json` yourself. adhd launches each one over stdio at startup, lists its tools, and exposes them as `<server>_<tool>` (`notes_search`) — so anything with an MCP server works without adhd shipping a connector for it. Servers added in Settings load on the next start.
+
+  Because those tools arrive with schemas adhd didn't write and side effects it can't infer from a name, **every MCP call asks for approval by default** — the same prompt `bash` gets, showing the tool name and its arguments. Set `"trust": "read"` on a server that only reads (a docs lookup, a search index) to let its tools run unprompted. A server that fails to start is logged and skipped; it never blocks startup.
+
+  stdio only — local processes are the local-first case and need no OAuth. Remote HTTP/SSE servers aren't supported.
 
 ## License
 

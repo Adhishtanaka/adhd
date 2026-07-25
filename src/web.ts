@@ -7,7 +7,7 @@ import { setSubagentSink } from "./subagent.js";
 import { setRenderSink } from "./render.js";
 import { sanitize } from "./sanitize.js";
 import { listFailures, clearFailures, removeDomain } from "./failcache.js";
-import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, type KeyName } from "./config.js";
+import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, mcpServers, setMcpServers, type KeyName } from "./config.js";
 import { setJobSinks, type FinishedJob } from "./jobs.js";
 import { loadMemories, saveMemory, deleteMemory } from "./memory.js";
 import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./scheduler.js";
@@ -295,6 +295,8 @@ function settingsFragment(): string {
     <div class="settings-section"><div id="roots">${rootsFragment()}</div></div>
     <h2>Always-allowed commands <span class="muted">(run without asking)</span></h2>
     <div class="settings-section"><div id="allowed">${allowedFragment()}</div></div>
+    <h2>MCP servers <span class="muted">(extra tools)</span></h2>
+    <div class="settings-section"><div id="mcp">${mcpFragment()}</div></div>
     <h2>Notifications</h2>
     <div class="settings-section">
       <div class="row">
@@ -333,6 +335,35 @@ function allowedFragment(): string {
     })
     .join("");
   return rows || '<p class="muted">None. Approving a command with “Always allow” adds it here.</p>';
+}
+
+// MCP servers are launched once at startup (see mcp.ts), so edits here land on
+// the next run rather than mid-session — say so instead of pretending otherwise.
+// ponytail: config editor, not a live connection manager. Hot-connecting a new
+// server is the upgrade if editing these turns out to be a frequent thing.
+function mcpFragment(): string {
+  const servers = mcpServers();
+  const rows = Object.entries(servers)
+    .map(
+      ([name, s]) => `<div class="row">
+        <div><span class="mono">${esc(name)}</span>
+          <span class="muted">${esc([s.command, ...(s.args ?? [])].join(" "))}</span>
+          <span class="badge ${s.trust === "read" ? "ok" : ""}">${s.trust === "read" ? "read-only" : "asks first"}</span></div>
+        <button class="btn ghost" hx-post="/mcp/delete" hx-vals='{"name":"${esc(name)}"}' hx-target="#mcp" hx-swap="innerHTML" hx-confirm="Remove ${esc(name)}?">Remove</button>
+      </div>`,
+    )
+    .join("");
+  const loaded = built.toolNames.filter((n) => Object.keys(servers).some((s) => n.startsWith(`${s}_`))).length;
+  return `${rows || '<p class="muted">None. Add a server to give adhd tools it doesn\'t ship with.</p>'}
+    <form hx-post="/mcp" hx-target="#mcp" hx-swap="innerHTML" class="stack">
+      <input name="name" placeholder="name (e.g. notes)" required />
+      <input name="command" placeholder="command (e.g. npx)" required />
+      <input name="args" placeholder="arguments, space-separated (e.g. -y @some/notes-mcp)" />
+      <label class="row"><span>Read-only — run its tools without asking</span>
+        <input type="checkbox" name="trust" value="read" /></label>
+      <button class="btn">Add server</button>
+    </form>
+    <p class="muted">${loaded} tool${loaded === 1 ? "" : "s"} loaded. Changes apply when adhd restarts.</p>`;
 }
 
 function failuresFragment(): string {
@@ -590,6 +621,25 @@ Bun.serve({
         case "/allowed/delete":
           setAllowedCommands(allowedCommands().filter((k) => k !== b.key));
           return html(allowedFragment());
+        case "/mcp": {
+          // Name goes into a tool name, so keep it to what a tool name allows.
+          const name = String(b.name || "").trim().replace(/[^A-Za-z0-9_-]/g, "_");
+          const command = String(b.command || "").trim();
+          if (name && command) {
+            const args = String(b.args || "").trim().split(/\s+/).filter(Boolean);
+            setMcpServers({
+              ...mcpServers(),
+              // Anything but an explicit read-only tick asks before every call.
+              [name]: { command, ...(args.length ? { args } : {}), trust: b.trust === "read" ? "read" : "ask" },
+            });
+          }
+          return html(mcpFragment());
+        }
+        case "/mcp/delete": {
+          const { [String(b.name)]: _gone, ...rest } = mcpServers();
+          setMcpServers(rest);
+          return html(mcpFragment());
+        }
       }
     }
 
@@ -601,6 +651,7 @@ Bun.serve({
       if (p === "/failures") return html(failuresFragment());
       if (p === "/roots") return html(rootsFragment());
       if (p === "/allowed") return html(allowedFragment());
+      if (p === "/mcp") return html(mcpFragment());
       if (p === "/state")
         // maptilerKey is a client-side map-tile key (public by design, kept in .env
         // not source) — the browser needs it to load MapTiler tiles.
