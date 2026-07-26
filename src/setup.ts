@@ -11,10 +11,14 @@ import {
   autoBudget,
   CHARS_PER_TOKEN,
   PROVIDER_KEY,
+  capabilities,
+  disabledTools,
+  type Capabilities,
   type Config,
 } from "./config.js";
+import { todoTools } from "./todo.js";
 import { builtinTools, loadUserTools } from "./tools.js";
-import { loadMcpTools } from "./mcp.js";
+import { loadMcpTools, mcpCatalog } from "./mcp.js";
 import { loadSkills, skillsPromptSection, useSkillTool } from "./skills.js";
 import { loadMemories, memoryPromptSection, memoryTools } from "./memory.js";
 import { scheduleTools } from "./scheduler.js";
@@ -51,6 +55,8 @@ export const BASE_SYSTEM =
   "their tools/stack, a stable preference — or explicitly asks you to remember something, save it " +
   "immediately with remember (e.g. id 'user/location', type 'user'). Skip one-off conversation " +
   "trivia and anything derivable from the code. " +
+  "For a task that takes several steps, call todo_write once with your plan, then again as each step's status " +
+  "changes — the user sees it live. Keep exactly one item 'doing'. Skip it for anything you finish in a step or two. " +
   "For a large, self-contained subtask, delegate it with spawn_agent; otherwise do it inline. " +
   "For a complex task that genuinely needs several passes of building on prior work, use loop_task " +
   "(it asks the user to approve a max iteration count first); don't use it for ordinary one-shot tasks. " +
@@ -83,6 +89,8 @@ export type Built = {
   hasKey: () => boolean; // key for the CURRENT model's provider present?
   setModel: (id: string) => void; // switch + persist (keeps history)
   refreshModels: () => void; // re-resolve after a key was added
+  applyCaps: () => string[]; // re-filter tools after a Settings change; returns the live names
+  allToolNames: string[]; // every tool that exists, on or off — for the Settings list
 };
 
 // Size the history budget from the model's real context window, then ask the
@@ -108,22 +116,73 @@ function applyContext(agent: Agent, config: Config): void {
 // it in place (setModel/refreshModels) propagates to the agent AND to subagents,
 // which read it at spawn time. Works with no API key yet (models stays empty);
 // the caller gates chat on hasKey() and calls refreshModels() once a key is set.
+// Which capability each builtin belongs to. Anything unlisted is always on —
+// ask_user is the interaction channel itself, so it has no switch.
+const TOOL_CAP: Record<string, keyof Capabilities> = {
+  read_file: "files", write_file: "files", list_dir: "files", grep: "files",
+  glob: "files", search_files: "files",
+  bash: "shell", powershell: "shell", run_script: "shell",
+  web_search: "web", web_fetch: "web",
+  remember: "memory", recall: "memory",
+  use_skill: "skills",
+  schedule: "schedule",
+  spawn_agent: "subagents", loop_task: "subagents",
+  run_flow: "flows",
+  render_ui: "renderUi",
+  todo_write: "todo",
+};
+
+/**
+ * Drop tools whose capability is off, plus any switched off by name.
+ * `mcpNames` is passed in because MCP tool names aren't knowable statically —
+ * without it, switching MCP off left every chrome_* tool live, since they match
+ * nothing in TOOL_CAP and so fell through to "always on".
+ */
+function allowed(
+  tools: Record<string, Tool>,
+  caps: Capabilities,
+  off: Set<string>,
+  mcpNames: Set<string>,
+): Record<string, Tool> {
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => {
+      if (off.has(name)) return false;
+      if (mcpNames.has(name)) return caps.mcp;
+      const c = TOOL_CAP[name];
+      return c ? caps[c] : true;
+    }),
+  );
+}
+
 export async function buildAgent(): Promise<Built> {
   const config = loadConfig();
-  const skills = loadSkills();
-  const memories = loadMemories();
+  const caps = capabilities(config);
+  const off = disabledTools(config);
+  const skills = caps.skills ? loadSkills() : {};
+  const memories = caps.memory ? loadMemories() : [];
 
-  const baseTools: Record<string, Tool> = {
+  // Everything that exists, before filtering. Kept whole so a capability can be
+  // switched back on without a restart — `allowed()` re-runs over this.
+  // MCP is the one exception: its tools only exist if we connected at startup,
+  // so turning MCP back on after starting with it off does need a restart.
+  const allBase: Record<string, Tool> = {
     ...builtinTools(),
     use_skill: useSkillTool(skills),
     ...memoryTools(),
     ...scheduleTools(),
+    ...todoTools(),
     ...(await loadUserTools()),
-    ...(await loadMcpTools()),
+    ...(caps.mcp ? await loadMcpTools() : {}),
   };
+  // Every name any connected server offered, switched on or not — this is what
+  // makes the MCP capability toggle actually reach its tools.
+  const mcpNames = new Set(Object.values(mcpCatalog()).flatMap((ts) => ts.map((t) => t.full)));
+  const baseTools = allowed(allBase, caps, off, mcpNames);
+  // A capability that's off contributes nothing to the prompt either — the
+  // catalog/skill/memory sections are pure context cost when their tools are gone.
   const system =
     (config.systemPrompt || BASE_SYSTEM) +
-    catalogPromptSection() +
+    (caps.renderUi ? catalogPromptSection() : "") +
     envSection() +
     skillsPromptSection(skills) +
     memoryPromptSection(memories);
@@ -157,13 +216,14 @@ export async function buildAgent(): Promise<Built> {
     },
   });
 
-  const tools: Record<string, Tool> = {
-    ...baseTools,
+  const allAgentTools: Record<string, Tool> = {
+    ...allBase,
     spawn_agent: spawnAgentTool({ models, tools: subagentTools, system, historyBudget: config.historyBudget }),
     loop_task: loopTaskTool({ models, tools: subagentTools, system, historyBudget: config.historyBudget }),
     run_flow: runFlowTool(runFlow, reportSubagent),
     render_ui: renderUiTool(), // main agent only — subagents return text, not UI
   };
+  const tools = allowed(allAgentTools, caps, off, mcpNames);
 
   const agent = createAgent({ models, tools, system, historyBudget: config.historyBudget });
 
@@ -176,10 +236,26 @@ export async function buildAgent(): Promise<Built> {
 
   applyContext(agent, config);
 
+  // Re-filter against config as it is NOW, so a Settings toggle lands on the
+  // next turn rather than the next launch. `toolNames` is rebuilt too, since
+  // /state feeds the Flows tool picker from it.
+  let liveNames = Object.keys(tools);
+  const applyCaps = (): string[] => {
+    const fresh = loadConfig();
+    const next = allowed(allAgentTools, capabilities(fresh), disabledTools(fresh), mcpNames);
+    agent.setTools(next);
+    liveNames = Object.keys(next);
+    return liveNames;
+  };
+
   return {
     agent,
     config,
-    toolNames: Object.keys(tools),
+    get toolNames() {
+      return liveNames;
+    },
+    allToolNames: Object.keys(allAgentTools),
+    applyCaps,
     skillNames: Object.keys(skills),
     memoryIds: memories.map((m) => m.id),
     runFlow,

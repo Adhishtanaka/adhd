@@ -15,7 +15,7 @@ export type AgentEvent =
 // it instead of leaving the user to guess. Sizes are CHARS — the same unit the
 // budget is in, because there's no tokenizer here (see HISTORY_BUDGET).
 export type ContextSeg = {
-  kind: "system" | "summary" | "user" | "assistant" | "tool";
+  kind: "system" | "schemas" | "summary" | "user" | "assistant" | "tool";
   name?: string; // tool name, for colouring the strip by tool
   size: number;
 };
@@ -59,9 +59,9 @@ function isBadToolCall(e: unknown): boolean {
 export type Agent = {
   send(userText: string, onEvent: (e: AgentEvent) => void): Promise<void>;
   setModels(models: LanguageModel[]): void; // hot-swap the model chain (/model)
+  setTools(tools: Record<string, Tool>): void; // hot-swap the tool set (capability toggles)
   setContext(budget: number, window: number, model: string): void; // re-size after a model swap
   stats(): ContextStats; // current occupancy, for the strip + /state
-  compact(onEvent: (e: AgentEvent) => void): Promise<void>; // "Compact now" button
   reset(): void; // clear conversation history (new chat)
 };
 
@@ -129,6 +129,30 @@ const modelName = (m: LanguageModel): string =>
 // One history message → one strip segment. Tool results ride in "tool" messages;
 // an assistant message carrying tool calls is labelled by the first one so the
 // strip shows which tool cost the space rather than a nameless block.
+// Tool schemas are re-sent on EVERY request, so with a few dozen tools they can
+// outweigh the whole conversation — and they were invisible, which made the
+// context look like it filled itself. Counting them is what makes the capability
+// switches in Settings show their worth.
+//
+// ponytail: an approximation. The SDK serialises zod to JSON Schema at call time
+// and we don't want to do that work per keystroke, so this measures the
+// description plus a best-effort stringify of the schema. Off by a constant
+// factor, not by an order of magnitude; swap in the real conversion if the
+// number ever needs to be exact.
+function schemaSize(tools: Record<string, Tool>): number {
+  let n = 0;
+  for (const [name, t] of Object.entries(tools)) {
+    n += name.length + String((t as any).description ?? "").length;
+    try {
+      const s = (t as any).inputSchema;
+      n += JSON.stringify(s?.jsonSchema ?? s?._def ?? s ?? {})?.length ?? 0;
+    } catch {
+      n += 200; // circular or exotic schema — a flat guess beats crashing stats()
+    }
+  }
+  return n;
+}
+
 function segment(m: ModelMessage): ContextSeg {
   const size = msgSize(m);
   if (m.role === "user") return { kind: "user", size };
@@ -160,9 +184,13 @@ export function createAgent(opts: {
   // instead of hammering the dead one every turn.
   let modelIdx = 0;
   let models = opts.models; // mutable so /model can hot-swap without losing history
+  let tools = opts.tools; // mutable so capability toggles apply on the next turn
 
   function stats(): ContextStats {
-    const segments: ContextSeg[] = [{ kind: "system", size: opts.system.length }];
+    const segments: ContextSeg[] = [
+      { kind: "system", size: opts.system.length },
+      { kind: "schemas", size: schemaSize(tools), name: `${Object.keys(tools).length} tools` },
+    ];
     if (summary) segments.push({ kind: "summary", size: summary.length });
     for (const m of history) segments.push(segment(m));
     return {
@@ -178,19 +206,11 @@ export function createAgent(opts: {
   // When history outgrows the budget, summarize the oldest messages into `summary`
   // rather than dropping them outright. On any summarizer failure (e.g. the compaction
   // call itself is rate-limited) the messages stay dropped — no worse than before.
-  // `force` is the "Compact now" button: compact even when under budget.
-  async function compact(onEvent: (e: AgentEvent) => void, force = false): Promise<void> {
+  async function compact(onEvent: (e: AgentEvent) => void): Promise<void> {
     const historySize = history.reduce((s, m) => s + msgSize(m), 0);
-    if (!force && summary.length + historySize <= budget) return;
-    // splitOldest only ever trims `history`, so a forced compaction has to aim
-    // at the history size — aiming at the total (which includes an 8k system
-    // prompt) meant "Compact now" quietly dropped nothing on a short thread.
-    const dropped = splitOldest(history, (force ? historySize : budget) * KEEP_RATIO);
-    if (!dropped.length) {
-      if (force) onEvent({ type: "info", message: "nothing to compact yet" });
-      onEvent({ type: "context", stats: stats() });
-      return;
-    }
+    if (summary.length + historySize <= budget) return;
+    const dropped = splitOldest(history, budget * KEEP_RATIO);
+    if (!dropped.length) return;
     try {
       summary = cap(await summarizeMessages(summary, dropped, models[modelIdx], budget), 4000);
       compactions++;
@@ -206,13 +226,15 @@ export function createAgent(opts: {
       models = m;
       modelIdx = 0;
     },
+    setTools(t) {
+      tools = t;
+    },
     setContext(b, w, model) {
       budget = b;
       window = w;
       modelId = model;
     },
     stats,
-    compact: (onEvent) => compact(onEvent, true),
     reset() {
       history.length = 0;
       summary = "";
@@ -233,7 +255,7 @@ export function createAgent(opts: {
           const result = streamText({
             model: models[modelIdx],
             system: opts.system + (summary ? `\n\nSummary of earlier conversation:\n${summary}` : ""),
-            tools: opts.tools,
+            tools,
             stopWhen: stepCountIs(12),
             messages: [...history, ...pendingTurn],
             maxRetries: 0, // we handle rate-limit retries/fallback ourselves

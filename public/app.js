@@ -9,14 +9,12 @@ const setHome = (on) => chatArea.classList.toggle("home", on);
 const msg = document.getElementById("msg");
 const composer = document.getElementById("composer");
 const sendBtn = document.getElementById("send");
-const tokensEl = document.getElementById("tokens");
 const modelEl = document.getElementById("model-select");
 const connEl = document.getElementById("conn");
 const nokey = document.getElementById("nokey");
 const statusEl = document.getElementById("status");
 const statusText = document.getElementById("status-text");
 
-let tokens = 0;
 let busy = false;
 let maptilerKey = ""; // filled from /state; empty → maps fall back to OSM tiles
 let turnAssistants = [];
@@ -546,6 +544,10 @@ function Native({ make }) {
   return h("div", { ref: host });
 }
 const native = (make) => h(Native, { make });
+// Prefer the server-rendered markdown for a text prop, else plain text. Returns
+// the props to spread, so a component doesn't branch on it twice.
+const html = (rendered, plain) =>
+  rendered != null ? { dangerouslySetInnerHTML: { __html: rendered } } : { children: plain || "" };
 const REGISTRY = {
   // props.html is server-sanitized markdown (see setRenderSink in web.ts); the
   // model's raw html field is stripped there and never reaches this.
@@ -554,7 +556,12 @@ const REGISTRY = {
       ? h("div", { className: "md text-paper/95", ref: (n) => n && enrich(n), dangerouslySetInnerHTML: { __html: p.html } })
       : h("div", { className: "md text-paper/95" }, p.content || ""),
   Heading: ({ p }) =>
-    h("h" + Math.min(3, Math.max(1, p.level || 2)), { className: "font-display font-semibold" }, p.content || ""),
+    h("h" + Math.min(3, Math.max(1, p.level || 2)), {
+      className: "font-display font-semibold",
+      // Same rule as Text: *Html is server-derived and sanitized, never the
+      // model's own html field. Falls back to plain text if it's missing.
+      ...html(p.contentHtml, p.content),
+    }),
   Image: ({ p }) => native(() => imageEl(p.src, p.alt, p.caption)),
   Svg: ({ p }) => native(() => svgEl(p.code, p.background)),
   Video: ({ p }) => native(() => videoEl(p.src, p.provider)),
@@ -572,15 +579,17 @@ const REGISTRY = {
     h(
       "div",
       { className: "frame space-y-2" },
-      p.title ? h("div", { className: "font-display font-semibold", key: "title" }, p.title) : null,
+      p.title
+        ? h("div", { className: "font-display font-semibold md", key: "title", ...html(p.titleHtml, p.title) })
+        : null,
       kids,
     ),
   Grid: ({ kids }) => h("div", { className: "grid gap-3 sm:grid-cols-2" }, kids),
   List: ({ p }) =>
     h(
       p.ordered ? "ol" : "ul",
-      { className: "pl-5 space-y-1 " + (p.ordered ? "list-decimal" : "list-disc") },
-      (p.items || []).map((it, i) => h("li", { key: i }, it)),
+      { className: "pl-5 space-y-1 md " + (p.ordered ? "list-decimal" : "list-disc") },
+      (p.items || []).map((it, i) => h("li", { key: i, ...html(p.itemsHtml?.[i], it) })),
     ),
   Link: ({ p }) =>
     h(
@@ -862,12 +871,11 @@ function connect() {
   // one EventSource for the whole app, so it's forwarded rather than duplicated.
   on("flow", (d) => window.onFlowEvent?.(d));
   on("error", (d) => add(el("font-mono text-xs text-bad", "error: " + d.message)));
-  on("usage", (d) => {
-    tokens += d.total;
-    tokensEl.textContent = tokens >= 1000 ? (tokens / 1000).toFixed(1) + "k" : tokens;
-  });
+  // usage is still broadcast; nothing displays it now that the context strip
+  // answers the question people were actually reading the counter for.
   // Occupancy, not spend — the header counter answers the other question.
   on("context", (d) => renderContext(d));
+  on("todos", (d) => renderTodos(d.items));
   on("busy", (d) => setBusy(d.busy));
   on("model", (d) => (modelEl.value = d.model));
   on("confirm", (d) => confirmCard(d));
@@ -1011,8 +1019,7 @@ msg.addEventListener("input", () => {
   msg.style.height = "auto";
   msg.style.height = Math.min(msg.scrollHeight, 160) + "px";
 });
-document.getElementById("open-settings").prepend(icon("settings"));
-sendBtn.append(icon("arrow-up"));
+sendBtn.append(icon("arrow-up")); // header buttons carry their own SVG in index.html
 const panel = document.getElementById("panel");
 window.openSettings = () => {
   panel.classList.remove("hidden");
@@ -1025,7 +1032,6 @@ document.getElementById("open-settings").onclick = openSettings;
 
 // ---- new chat ----
 const newChatBtn = document.getElementById("new-chat");
-newChatBtn.prepend(icon("plus"));
 newChatBtn.onclick = async () => {
   await post("/new", {});
   // Unmount before clearing the DOM, so Native's cleanup runs (Leaflet maps and
@@ -1036,9 +1042,8 @@ newChatBtn.onclick = async () => {
   log.innerHTML = "";
   pinned = true;
   setHome(true);
-  tokens = 0;
-  tokensEl.textContent = "0";
   ctxEl.classList.add("hidden"); // server also broadcasts a fresh context on /new
+  renderTodos([]);
 };
 
 document.addEventListener("keydown", (e) => {
@@ -1082,8 +1087,8 @@ const short = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.ro
 
 function renderContext(s) {
   if (!s || !s.budget) return;
-  // Nothing but the system prompt yet: no signal worth the vertical space.
-  const empty = s.segments.every((g) => g.kind === "system");
+  // Only fixed overhead so far (prompt + tool schemas): no conversation to show.
+  const empty = s.segments.every((g) => g.kind === "system" || g.kind === "schemas");
   ctxEl.classList.toggle("hidden", empty);
   if (empty) return;
 
@@ -1110,7 +1115,30 @@ function renderContext(s) {
   ctxBar.title = `${Math.round(pct * 100)}% of the history budget used`;
 }
 
-document.getElementById("ctx-compact").onclick = () => post("/compact", {});
+// --- task list --------------------------------------------------------------
+// The agent's own plan, as it goes. Hidden entirely when there's no list, so a
+// one-shot question doesn't grow furniture.
+const todosEl = document.getElementById("todos");
+const todoList = document.getElementById("todo-list");
+const MARK = { done: "[x]", doing: "[>]", pending: "[ ]" };
+
+function renderTodos(items) {
+  const list = items || [];
+  todosEl.classList.toggle("hidden", list.length === 0);
+  todoList.replaceChildren();
+  for (const it of list) {
+    const row = document.createElement("div");
+    row.className = "todo-row";
+    row.dataset.s = it.status;
+    const mark = document.createElement("span");
+    mark.className = "todo-mark";
+    mark.textContent = MARK[it.status] || MARK.pending;
+    const title = document.createElement("span");
+    title.textContent = it.title; // textContent: the model wrote this
+    row.append(mark, title);
+    todoList.append(row);
+  }
+}
 
 async function refreshState() {
   try {
@@ -1136,6 +1164,7 @@ async function refreshState() {
     nokey.classList.toggle("hidden", s.hasKey);
     sendBtn.disabled = !s.hasKey;
     renderContext(s.context);
+    renderTodos(s.todos);
   } catch {}
 }
 modelEl.onchange = () => post("/model", { id: modelEl.value });

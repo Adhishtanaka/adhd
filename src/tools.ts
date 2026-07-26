@@ -6,7 +6,7 @@ import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tool, type Tool } from "ai";
 import { z } from "zod";
-import { ROOTS, allowedRoots, isUnderRoots, allowedCommands } from "./config.js";
+import { ROOTS, allowedRoots, isUnderRoots, allowedCommands, permissionMode } from "./config.js";
 import { rankChunks, extractImages } from "./extract.js";
 import { recordFailure, isBadDomain, domainOf } from "./failcache.js";
 import { withDeadline } from "./jobs.js";
@@ -42,7 +42,14 @@ export function setBashConfirm(fn: Confirm) {
   confirmBash = fn;
 }
 // Reuse the same prompt for any action that needs approval (e.g. loop_task).
-export const confirmAction = (message: string): Promise<boolean> => confirmBash({ command: message });
+// `trusted` marks a caller that would normally skip the prompt (an MCP server
+// marked trust:"read"); permission mode "ask" overrides that and asks anyway.
+export const confirmAction = (message: string, trusted = false): Promise<boolean> => {
+  const mode = permissionMode();
+  if (mode === "auto") return Promise.resolve(true);
+  if (trusted && mode !== "ask") return Promise.resolve(true);
+  return confirmBash({ command: message });
+};
 
 // Resolve to `fallback` if `p` hasn't settled within `ms`, running `onTimeout`
 // first so the caller can clean up whatever it was waiting on. The timer is
@@ -72,7 +79,13 @@ export function allowKeyFor(runner: string, command: string): string | null {
 // One gate for bash/powershell: skip the prompt if this program was already
 // blanket-approved, otherwise ask.
 async function approve(runner: string, command: string, explain?: string): Promise<boolean> {
+  const mode = permissionMode();
+  if (mode === "auto") return true;
   const allowKey = allowKeyFor(runner, command);
+  // "ask" ignores the always-allow list — the whole point of that mode is that
+  // nothing runs unseen, including things you approved on a calmer day. The
+  // card also drops its "always allow" button, so a click can't re-arm it.
+  if (mode === "ask") return confirmBash({ command, explain, allowKey: null });
   if (allowKey && allowedCommands().includes(allowKey)) return true;
   return confirmBash({ command, explain, allowKey });
 }

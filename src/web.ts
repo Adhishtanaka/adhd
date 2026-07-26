@@ -7,12 +7,13 @@ import { setSubagentSink } from "./subagent.js";
 import { setRenderSink } from "./render.js";
 import { sanitize } from "./sanitize.js";
 import { listFailures, clearFailures, removeDomain } from "./failcache.js";
-import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, mcpServers, setMcpServers, setCustomBaseURL, loadConfig, type KeyName } from "./config.js";
+import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, mcpServers, setMcpServers, setCustomBaseURL, loadConfig, capabilities, setCapabilities, permissionMode, setPermissionMode, disabledTools, setDisabledTools, splitSpec, PROVIDER_KEY, CAPABILITIES, type Capabilities, type KeyName } from "./config.js";
 import { setJobSinks, type FinishedJob } from "./jobs.js";
 import { loadMemories, saveMemory, deleteMemory } from "./memory.js";
 import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./scheduler.js";
 import { loadFlows, saveFlows, seedExamples, toolArgSpecs, RunControl, type Flow } from "./flows.js";
-import { seedMcpDefaults } from "./mcp.js";
+import { seedMcpDefaults, mcpCatalog } from "./mcp.js";
+import { todoItems, setTodoSink, resetTodos } from "./todo.js";
 
 // The AI SDK leaves some internal promises unawaited on error; swallow the stray
 // rejections so they don't crash the server (real errors reach the client).
@@ -21,6 +22,7 @@ process.on("unhandledRejection", () => {});
 loadSecretsIntoEnv(); // hydrate API keys from ~/.adhd/secrets.json before building
 seedMcpDefaults(); // first run: wire up Chrome — must precede buildAgent's loadMcpTools
 const built = await buildAgent();
+setTodoSink((items) => broadcast("todos", { items })); // agent's plan → the strip under the composer
 seedExamples(); // first run: put a few worked examples on the Flows page
 
 // Prefer public/ next to the source; fall back to cwd/public (compiled binary,
@@ -95,14 +97,32 @@ setSubagentSink((line) => broadcast("sub", { line }));
 // Text nodes carry markdown (bold, lists, inline code). Render it to safe HTML
 // here — reusing the same marked+sanitize path as assistant prose — so the
 // client can drop it in as innerHTML instead of showing literal ** and #.
+// Every *Html prop below is ALWAYS server-derived from the matching text prop
+// and sanitized — never trust a model-supplied html field (the client drops
+// these into innerHTML, so a raw html value here would be a straight XSS bypass).
+const mdBlock = (s: string) => sanitize(marked.parse(s) as string);
+// Inline: no wrapping <p>, for text that sits in a heading, a title or an <li>.
+const mdInline = (s: string) => sanitize(marked.parseInline(s) as string);
+
 setRenderSink((spec) => {
   for (const el of Object.values(spec.elements ?? {})) {
-    if (el.type === "Text" && el.props) {
-      // props.html is ALWAYS server-derived from content and sanitized — never
-      // trust a model-supplied html field (the client drops props.html into
-      // innerHTML, so a raw html value here would be a straight XSS bypass).
-      if (typeof el.props.content === "string") el.props.html = sanitize(marked.parse(el.props.content) as string);
-      else delete el.props.html;
+    const p = el.props as Record<string, unknown> | undefined;
+    if (!p) continue;
+    // Models write markdown in every text field, not just Text — a bolded label
+    // in a card title or a link in a list item came through as literal
+    // asterisks. Each of these gets the same sanitize-then-render treatment.
+    if (el.type === "Text") {
+      if (typeof p.content === "string") p.html = mdBlock(p.content);
+      else delete p.html;
+    } else if (el.type === "Heading" || el.type === "Card") {
+      for (const k of ["content", "title"]) {
+        if (typeof p[k] === "string") p[`${k}Html`] = mdInline(p[k] as string);
+        else delete p[`${k}Html`];
+      }
+    } else if (el.type === "List") {
+      p.itemsHtml = Array.isArray(p.items)
+        ? p.items.map((i: unknown) => mdInline(String(i ?? "")))
+        : undefined;
     }
   }
   broadcast("render_ui", { spec });
@@ -318,6 +338,19 @@ function settingsFragment(): string {
       true,
     ) +
     group(
+      "Capabilities",
+      `${built.toolNames.length} of ${built.allToolNames.length} tools active`,
+      `<p class="muted">Everything switched on here is sent to the model on every message, whether you use it or not.
+       Switch off what this chat doesn't need and the context goes further.</p>
+      <div class="settings-section">${capsFragment()}</div>`,
+    ) +
+    group(
+      "Permissions",
+      MODE_LABEL[permissionMode()][0].toLowerCase(),
+      `<p class="muted">When adhd should stop and ask before doing something to your machine.</p>
+      <div class="settings-section">${permissionsFragment()}</div>`,
+    ) +
+    group(
       "What adhd may do",
       `${n(allowedRoots().length, "folder")} · ${n(allowedCommands().length, "command")} · ${n(Object.keys(mcpServers()).length, "server")}`,
       `<h2>Local folders <span class="muted">(files adhd may read)</span></h2>
@@ -395,17 +428,99 @@ function allowedFragment(): string {
 // the next run rather than mid-session — say so instead of pretending otherwise.
 // ponytail: config editor, not a live connection manager. Hot-connecting a new
 // server is the upgrade if editing these turns out to be a frequent thing.
+// A toggle that POSTs its new value straight away. `on` is the current state;
+// clicking sends the opposite, so there's no Save button to forget.
+function toggleRow(label: string, note: string, on: boolean, post: string, vals: Record<string, unknown>): string {
+  // HTMX lives on the <input>, not the wrapper, so the control stays reachable
+  // by keyboard and `change` fires for space/enter as well as a click.
+  return `<label class="row">
+      <span>${label}${note ? ` <span class="muted">${note}</span>` : ""}</span>
+      <span class="switch">
+        <input type="checkbox" ${on ? "checked" : ""}
+          hx-post="${post}" hx-trigger="change" hx-vals='${esc(JSON.stringify({ ...vals, on: !on }))}'
+          hx-target="#settings" hx-swap="innerHTML" /><span class="track"></span>
+      </span>
+    </label>`;
+}
+
+const CAP_LABEL: Record<keyof Capabilities, [string, string]> = {
+  files: ["Files", "read, write, search your files"],
+  shell: ["Shell", "bash, powershell, scripts"],
+  web: ["Web", "search and fetch pages"],
+  memory: ["Memory", "remember facts across sessions"],
+  skills: ["Skills", "instruction packs it loads on demand"],
+  schedule: ["Schedule", "run things later"],
+  mcp: ["MCP servers", "tools from other programs"],
+  subagents: ["Subagents", "delegate and iterate"],
+  flows: ["Run flows from chat", "the Flows page keeps working"],
+  renderUi: ["Rich replies", "charts, maps, galleries"],
+  todo: ["Task list", "show its plan while it works"],
+};
+
+// Every group here is context you pay for on every request, so the counts are
+// the point of the screen, not decoration.
+function capsFragment(): string {
+  const caps = capabilities();
+  const rows = (Object.keys(CAPABILITIES) as (keyof Capabilities)[])
+    .map((k) => toggleRow(CAP_LABEL[k][0], CAP_LABEL[k][1], caps[k], "/capabilities", { cap: k }))
+    .join("");
+  const on = built.toolNames.length;
+  const total = built.allToolNames.length;
+  return `${rows}
+    <p class="muted">${on} of ${total} tools active. Switching a group off removes its tools and its slice of the
+    system prompt from every request — that's the context it stops costing you. Takes effect on your next message.
+    Turning MCP back on needs a restart, because the servers connect at startup.</p>`;
+}
+
+const MODE_LABEL: Record<string, [string, string]> = {
+  ask: ["Ask every time", "nothing runs unseen — ignores the always-allow list and read-only MCP servers"],
+  normal: ["Normal", "asks before anything that changes your machine, minus what you've already allowed"],
+  auto: ["Approve everything", "never asks. Only for a sandbox you don't mind losing"],
+};
+
+function permissionsFragment(): string {
+  const mode = permissionMode();
+  const rows = ["ask", "normal", "auto"]
+    .map(
+      (m) => `<label class="row">
+        <span>${MODE_LABEL[m][0]} <span class="muted">${MODE_LABEL[m][1]}</span></span>
+        <input type="radio" name="mode" value="${m}" ${m === mode ? "checked" : ""}
+          hx-post="/permissions" hx-vals='{"mode":"${m}"}' hx-target="#settings" hx-swap="innerHTML" />
+      </label>`,
+    )
+    .join("");
+  return `${rows}${mode === "auto" ? '<p class="muted" style="color:rgb(var(--c-negative))">Every shell command, file write and MCP call runs without asking.</p>' : ""}`;
+}
+
 function mcpFragment(): string {
   const servers = mcpServers();
+  const cat = mcpCatalog();
+  const off = disabledTools();
   const rows = Object.entries(servers)
-    .map(
-      ([name, s]) => `<div class="row">
+    .map(([name, s]) => {
+      // Its tools, collapsed — a server like Chrome brings 26, which is a wall
+      // of text until you actually want to switch one off.
+      const tools = cat[name] ?? [];
+      const live = tools.filter((t) => !off.has(t.full)).length;
+      const list = tools
+        .map((t) =>
+          toggleRow(
+            `<span class="mono">${esc(t.name)}</span>`,
+            esc(t.description.split("\n")[0].slice(0, 80)),
+            !off.has(t.full),
+            "/mcp/tool",
+            { tool: t.full },
+          ),
+        )
+        .join("");
+      return `<div class="row">
         <div><span class="mono">${esc(name)}</span>
           <span class="muted">${esc([s.command, ...(s.args ?? [])].join(" "))}</span>
           <span class="badge ${s.trust === "read" ? "ok" : ""}">${s.trust === "read" ? "read-only" : "asks first"}</span></div>
         <button class="btn ghost" hx-post="/mcp/delete" hx-vals='{"name":"${esc(name)}"}' hx-target="#mcp" hx-swap="innerHTML" hx-confirm="Remove ${esc(name)}?">Remove</button>
-      </div>`,
-    )
+      </div>
+      ${tools.length ? `<details class="settings-group"><summary>${tools.length} tools <span class="muted">${live} on</span></summary>${list}</details>` : ""}`;
+    })
     .join("");
   const loaded = built.toolNames.filter((n) => Object.keys(servers).some((s) => n.startsWith(`${s}_`))).length;
   return `${rows || '<p class="muted">None. Add a server to give adhd tools it doesn\'t ship with.</p>'}
@@ -417,7 +532,8 @@ function mcpFragment(): string {
         <input type="checkbox" name="trust" value="read" /></label>
       <button class="btn">Add server</button>
     </form>
-    <p class="muted">${loaded} tool${loaded === 1 ? "" : "s"} loaded. Changes apply when adhd restarts.</p>`;
+    <p class="muted">${loaded} tool${loaded === 1 ? "" : "s"} loaded. Switching individual tools off applies to your next
+    message; adding or removing a server needs a restart.</p>`;
 }
 
 function failuresFragment(): string {
@@ -629,17 +745,8 @@ Bun.serve({
         }
         case "/new":
           built.agent.reset();
+          resetTodos();
           broadcast("context", built.agent.stats());
-          return noContent();
-        // "Compact now": squeeze the thread in place instead of throwing it away
-        // (/new). Paired with the context strip — once you can see the bar near
-        // the marker, this is the move that isn't "start over".
-        case "/compact":
-          if (busy) return Response.json({ error: "busy" }, { status: 409 });
-          await built.agent.compact((e) => {
-            if (e.type === "info") broadcast("info", { message: e.message });
-            else if (e.type === "context") broadcast("context", e.stats);
-          });
           return noContent();
         case "/model":
           if (b.id) {
@@ -652,6 +759,26 @@ Bun.serve({
           built.refreshModels();
           return html(settingsFragment());
         }
+        // Capability groups and individual tools both end at the same place:
+        // rewrite config, then re-filter the live tool set so the next message
+        // sees the change without a restart.
+        case "/capabilities": {
+          const on = b.on === true || b.on === "true";
+          setCapabilities({ ...capabilities(), [b.cap]: on });
+          built.applyCaps();
+          return html(settingsFragment());
+        }
+        case "/mcp/tool": {
+          const on = b.on === true || b.on === "true";
+          const off = disabledTools();
+          on ? off.delete(b.tool) : off.add(b.tool);
+          setDisabledTools([...off]);
+          built.applyCaps();
+          return html(settingsFragment());
+        }
+        case "/permissions":
+          if (b.mode === "ask" || b.mode === "normal" || b.mode === "auto") setPermissionMode(b.mode);
+          return html(settingsFragment());
         // The "custom:" provider's endpoint — OpenRouter, Groq, Ollama, LM Studio.
         case "/base-url":
           if (b.url) {
@@ -730,7 +857,13 @@ Bun.serve({
         // not source) — the browser needs it to load MapTiler tiles.
         return Response.json({
           model: built.config.model,
-          models: KNOWN_MODELS,
+          // Only models you can actually reach: no key for a provider, no entry
+          // in the picker. Picking one that 401s is a worse experience than not
+          // seeing it. The current model always stays listed so the dropdown
+          // never disagrees with what's running.
+          models: KNOWN_MODELS.filter(
+            (m) => m === built.config.model || !!process.env[PROVIDER_KEY[splitSpec(m)[0]]],
+          ),
           hasKey: built.hasKey(),
           tools: built.toolNames.length,
           // for the Flows page tool-node picker: the tools a flow node may call
@@ -738,6 +871,7 @@ Bun.serve({
           toolNames: built.toolNames.filter((t) => !["spawn_agent", "loop_task", "run_flow", "render_ui", "ask_user"].includes(t)),
           toolArgs: built.toolArgs, // arg fields per tool, read off each tool's schema
           context: built.agent.stats(), // seeds the context strip on page load
+          todos: todoItems(), // seeds the task list too
           maptilerKey: process.env.MAPTILER_KEY ?? "",
         });
     }

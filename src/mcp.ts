@@ -4,7 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { dynamicTool, jsonSchema, type Tool } from "ai";
 import { cap, confirmAction } from "./tools.js";
-import { loadConfig, setMcpServers, HOME_ROOT } from "./config.js";
+import { loadConfig, setMcpServers, disabledTools, HOME_ROOT } from "./config.js";
 
 // MCP (modelcontextprotocol.io) servers, so any tool someone else already wrote
 // works here without adhd shipping a connector for it. Configured in config.json:
@@ -73,6 +73,14 @@ export function contentToText(result: unknown): string {
 // as a user tool that fails to import.
 const clients: Client[] = [];
 
+// What each server actually offered at connect time, so Settings can list a
+// server's tools instead of making you go read its docs. Filled by connect();
+// survives a tool being switched off, because the switch is what you came to
+// the list to flip.
+export type McpToolInfo = { name: string; full: string; description: string };
+const catalog: Record<string, McpToolInfo[]> = {};
+export const mcpCatalog = (): Record<string, McpToolInfo[]> => catalog;
+
 async function connect(name: string, spec: McpServer): Promise<Record<string, Tool>> {
   const client = new Client({ name: "adhd", version: "0.1.0" });
   await client.connect(
@@ -87,18 +95,30 @@ async function connect(name: string, spec: McpServer): Promise<Record<string, To
 
   const { tools } = await client.listTools();
   const out: Record<string, Tool> = {};
+  const off = disabledTools();
+  catalog[name] = tools.map((t) => ({
+    name: t.name,
+    full: toolName(name, t.name),
+    description: t.description ?? "",
+  }));
   for (const t of tools) {
     const full = toolName(name, t.name);
+    // Switched off in Settings: still catalogued (so it can be switched back on)
+    // but never handed to the model, so it costs no schema in the context.
+    if (off.has(full)) continue;
     out[full] = dynamicTool({
       description: `[${name}] ${t.description ?? t.name}`,
       // The server's own JSON Schema, handed to the model as-is — there's no zod
       // shape to write because the tools aren't known until runtime.
       inputSchema: jsonSchema((t.inputSchema ?? { type: "object", properties: {} }) as any),
       execute: async (args) => {
-        if (spec.trust !== "read") {
-          const ok = await confirmAction(`${full}(${cap(JSON.stringify(args ?? {}), 200)})`);
-          if (!ok) return "User declined this tool call.";
-        }
+        // trust:"read" normally skips the card; permission mode "ask" overrides
+        // that and prompts anyway, and "auto" skips regardless (see tools.ts).
+        const ok = await confirmAction(
+          `${full}(${cap(JSON.stringify(args ?? {}), 200)})`,
+          spec.trust === "read",
+        );
+        if (!ok) return "User declined this tool call.";
         try {
           return cap(contentToText(await client.callTool({ name: t.name, arguments: (args ?? {}) as any })));
         } catch (e) {

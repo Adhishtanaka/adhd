@@ -23,7 +23,64 @@ export type Config = {
   localRoots?: string[]; // folders the local-file tools may read (default: home)
   allowedCommands?: string[]; // "always allow" keys, e.g. "bash:git" (see tools.allowKeyFor)
   mcpServers?: Record<string, McpServer>; // stdio MCP servers to load tools from (see mcp.ts)
+  capabilities?: Partial<Capabilities>; // switch whole feature groups off (see below)
+  permissionMode?: PermissionMode;
+  disabledTools?: string[]; // individual tools switched off by name, MCP ones included
 };
+
+// --- capabilities -----------------------------------------------------------
+// Every group here costs context whether or not you use it: each tool ships its
+// schema and description on every single request, and skills/memory get listed
+// in the system prompt. Switching a group off removes it from both, which is
+// the point — a chat that only needs writing help shouldn't pay for a browser.
+export type Capabilities = {
+  files: boolean; // read_file, write_file, list_dir, grep, glob, search_files
+  shell: boolean; // bash, powershell, run_script
+  web: boolean; // web_search, web_fetch
+  memory: boolean; // remember/recall + the memory list in the system prompt
+  skills: boolean; // use_skill + the skill list in the system prompt
+  schedule: boolean; // schedule
+  mcp: boolean; // every MCP server's tools
+  subagents: boolean; // spawn_agent, loop_task
+  flows: boolean; // run_flow (the Flows page still works)
+  renderUi: boolean; // render_ui + its component catalog in the system prompt
+  todo: boolean; // the task list the agent keeps while it works
+};
+
+export const CAPABILITIES: Capabilities = {
+  files: true,
+  shell: true,
+  web: true,
+  memory: true,
+  skills: true,
+  schedule: true,
+  mcp: true,
+  subagents: true,
+  flows: true,
+  renderUi: true,
+  todo: true,
+};
+
+export function capabilities(config = loadConfig()): Capabilities {
+  return { ...CAPABILITIES, ...(config.capabilities ?? {}) };
+}
+
+// --- permission mode --------------------------------------------------------
+// "normal" is the shipped behaviour: the always-allow list and a server's
+// trust:"read" skip the prompt. "ask" turns both off, so every side effect gets
+// a card — the setting to reach for when you don't fully trust what you're
+// pointing adhd at. "auto" approves everything without asking.
+export type PermissionMode = "ask" | "normal" | "auto";
+
+export function permissionMode(): PermissionMode {
+  const m = loadConfig().permissionMode;
+  return m === "ask" || m === "auto" ? m : "normal";
+}
+
+/** Tools switched off individually (as opposed to a whole capability group). */
+export function disabledTools(config = loadConfig()): Set<string> {
+  return new Set(config.disabledTools ?? []);
+}
 
 // --- providers --------------------------------------------------------------
 // A model is named "<provider>:<id>". No prefix means deepseek, so every config
@@ -327,3 +384,6 @@ export function mcpServers(): Record<string, McpServer> {
 }
 
 export const setMcpServers = (mcpServers: Record<string, McpServer>): void => patchConfig({ mcpServers });
+export const setCapabilities = (c: Partial<Capabilities>): void => patchConfig({ capabilities: c });
+export const setPermissionMode = (permissionMode: PermissionMode): void => patchConfig({ permissionMode });
+export const setDisabledTools = (disabledTools: string[]): void => patchConfig({ disabledTools });
