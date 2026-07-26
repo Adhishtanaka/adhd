@@ -229,7 +229,10 @@ function svgEl(code, background) {
   fig.append(img);
   return withImageChrome(fig, uri, "illustration.svg", true);
 }
-function facade(thumb, embed) {
+// Click-to-play poster, so an embed only loads once you ask for it.
+// `watch` is the canonical page: some uploaders disable embedding outright, and
+// the player's own "Video unavailable" screen is a dead end without a way out.
+function facade(thumb, embed, watch) {
   const wrap = el("relative rounded-lg overflow-hidden bg-black aspect-video cursor-pointer group");
   wrap.setAttribute("role", "button");
   wrap.setAttribute("aria-label", "Play video");
@@ -254,7 +257,18 @@ function facade(thumb, embed) {
     f.allow = "autoplay; encrypted-media; fullscreen; picture-in-picture";
     f.allowFullscreen = true;
     f.loading = "lazy";
-    wrap.replaceWith(f);
+    if (!watch) return wrap.replaceWith(f);
+    // Keep a way out under the player, since we can't detect from outside the
+    // iframe whether YouTube rendered the video or its error page.
+    const box = el("space-y-1");
+    const a = document.createElement("a");
+    a.href = watch;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.className = "eyebrow hover:text-paper transition";
+    a.textContent = "Won't play? Open on YouTube →";
+    box.append(f, a);
+    wrap.replaceWith(box);
   };
   wrap.onclick = play;
   wrap.onkeydown = (e) => {
@@ -265,11 +279,40 @@ function facade(thumb, embed) {
   };
   return wrap;
 }
+// YT_ID_START — parsed URL-first, not by regex (see test/ytid.test.ts).
+// The old pattern only knew watch?v= and /embed/, only when `v` was the FIRST
+// query param, and accepted any 6+ chars as an id. That turned
+// "/embed/videoseries?list=…" into the id "videoseries" — a real video id is
+// always exactly 11 chars — and YouTube answered with its "Video unavailable"
+// page. Anything that isn't a confident 11-char id now returns null, so we fall
+// back to a plain link instead of embedding a player that can't work.
+const YT_HOST = /(^|\.)(youtube\.com|youtube-nocookie\.com|youtu\.be)$/;
+const YT_PATH = /^\/(?:embed|shorts|live|v)\/([\w-]{11})/;
 function ytId(src, provider) {
   if (provider && provider !== "youtube") return null;
-  const m = String(src).match(/(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([\w-]{6,})/);
-  return m ? m[1] : null;
+  const s = String(src ?? "").trim();
+  if (/^[\w-]{11}$/.test(s)) return s; // a bare id
+  let u;
+  try {
+    u = new URL(s, "https://www.youtube.com");
+  } catch {
+    return null;
+  }
+  if (!YT_HOST.test(u.hostname)) return null;
+  // youtu.be/<id> — the id is the whole path
+  if (u.hostname.endsWith("youtu.be")) {
+    const id = u.pathname.slice(1);
+    return /^[\w-]{11}$/.test(id) ? id : null;
+  }
+  // /watch?v=<id>, wherever `v` sits among the params
+  const v = u.searchParams.get("v");
+  if (v && /^[\w-]{11}$/.test(v)) return v;
+  const m = u.pathname.match(YT_PATH); // /embed/, /shorts/, /live/, /v/
+  // "videoseries" is YouTube's playlist-embed sentinel, and is exactly 11 chars
+  // like a real id — so the length check alone lets it through.
+  return m && m[1] !== "videoseries" ? m[1] : null;
 }
+// YT_ID_END
 function vimeoId(src, provider) {
   if (provider && provider !== "vimeo") return null;
   const m = String(src).match(/vimeo\.com\/(?:video\/)?(\d+)/);
@@ -277,7 +320,15 @@ function vimeoId(src, provider) {
 }
 function videoEl(src, provider) {
   const yt = ytId(src, provider);
-  if (yt) return facade(`https://i.ytimg.com/vi/${yt}/hqdefault.jpg`, `https://www.youtube-nocookie.com/embed/${yt}?autoplay=1`);
+  // origin + playsinline: the IFrame API wants an explicit origin, and without
+  // playsinline iOS hijacks playback into fullscreen. rel=0 keeps the end-card
+  // suggestions to the same channel.
+  if (yt)
+    return facade(
+      `https://i.ytimg.com/vi/${yt}/hqdefault.jpg`,
+      `https://www.youtube-nocookie.com/embed/${yt}?autoplay=1&playsinline=1&rel=0&origin=${encodeURIComponent(location.origin)}`,
+      `https://www.youtube.com/watch?v=${yt}`,
+    );
   const vim = vimeoId(src, provider);
   if (vim) return facade(null, `https://player.vimeo.com/video/${vim}?autoplay=1`);
   const v = document.createElement("video");

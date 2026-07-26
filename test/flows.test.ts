@@ -435,3 +435,41 @@ test("data.model reaches the executor; unset stays undefined", async () => {
   await runFlow(flow, stub({ runPrompt: async (p, _i, o) => (seenModels.push(o.model), p) }));
   expect(seenModels).toEqual(["anthropic:claude-sonnet-5", undefined]);
 });
+
+// --- stored-flow hardening --------------------------------------------------
+
+test("a node without a position gets one, so the canvas can't crash on it", async () => {
+  const { normalize } = await import("../src/flows.js");
+  // React Flow reads node.position.x directly: undefined here threw
+  // "Cannot read properties of undefined (reading 'x')" and left the whole
+  // Flows page blank — one API-created flow took down every other one.
+  const flow: Flow = {
+    id: "f",
+    name: "no positions",
+    nodes: [node("a", "prompt", { prompt: "A" }), node("b", "prompt", { prompt: "B" })],
+    edges: [edge("a", "b")],
+  };
+  const out = normalize(flow);
+  for (const n of out.nodes) {
+    expect(typeof n.position?.x).toBe("number");
+    expect(typeof n.position?.y).toBe("number");
+  }
+  // Two nodes must not land on top of each other.
+  expect(out.nodes[0].position).not.toEqual(out.nodes[1].position!);
+});
+
+test("normalize leaves a hand-placed position alone and drops broken edges", async () => {
+  const { normalize } = await import("../src/flows.js");
+  const out = normalize({
+    id: "f",
+    name: "mixed",
+    nodes: [
+      { id: "a", type: "prompt", position: { x: 12, y: 34 }, data: {} },
+      { id: "b", type: "prompt", data: {} } as any,
+    ],
+    edges: [edge("a", "b"), { source: "", target: "b" }, { source: "a", target: "" }],
+  });
+  expect(out.nodes[0].position).toEqual({ x: 12, y: 34 }); // untouched
+  expect(typeof out.nodes[1].position?.x).toBe("number"); // filled in
+  expect(out.edges).toHaveLength(1); // the two half-connected edges are gone
+});

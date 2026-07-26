@@ -42,11 +42,30 @@ export type FlowNode = {
 export type FlowEdge = { id?: string; source: string; target: string; sourceHandle?: string | null };
 export type Flow = { id: string; name: string; nodes: FlowNode[]; edges: FlowEdge[] };
 
+/**
+ * React Flow reads node.position.x directly, so a node without one throws
+ * "Cannot read properties of undefined (reading 'x')" and leaves the Flows page
+ * a blank grey canvas — one bad node takes down every flow. The canvas always
+ * writes a position, but a flow created through POST /flows or hand-edited JSON
+ * need not, so lay those out on read instead of trusting the file.
+ */
+export function normalize(flow: Flow): Flow {
+  return {
+    ...flow,
+    nodes: (flow.nodes ?? []).map((n, i) =>
+      typeof n?.position?.x === "number" && typeof n?.position?.y === "number"
+        ? n
+        : { ...n, position: { x: 60 + (i % 5) * 220, y: 80 + Math.floor(i / 5) * 140 } },
+    ),
+    edges: (flow.edges ?? []).filter((e) => e?.source && e?.target),
+  };
+}
+
 export function loadFlows(): Flow[] {
   if (!existsSync(FLOWS_FILE)) return [];
   try {
     const v = JSON.parse(readFileSync(FLOWS_FILE, "utf8"));
-    return Array.isArray(v) ? v.filter((f) => f?.id && Array.isArray(f?.nodes)) : [];
+    return Array.isArray(v) ? v.filter((f) => f?.id && Array.isArray(f?.nodes)).map(normalize) : [];
   } catch {
     return [];
   }
