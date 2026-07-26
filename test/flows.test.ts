@@ -209,7 +209,7 @@ test("a prompt node's useMemory flag reaches the executor", async () => {
     edges: [edge("a", "b")],
   };
   const flags: boolean[] = [];
-  await runFlow(flow, stub({ runPrompt: async (p, _i, _s, useMemory) => (flags.push(useMemory), p) }));
+  await runFlow(flow, stub({ runPrompt: async (p, _i, o) => (flags.push(!!o.useMemory), p) }));
   expect(flags).toEqual([true, false]); // on for A, off (default) for B
 });
 
@@ -288,4 +288,150 @@ test("entry is the node nothing points at, whatever the array order", async () =
     edges: [edge("first", "second")],
   };
   expect(await runFlow(flow, stub())).toBe("A>B");
+});
+
+// --- shared state ({{key}}) -------------------------------------------------
+// runFlow hands the executor the RAW template plus the state; it's flowRunner's
+// executors that call fill(). These stubs do the same so the two halves are
+// tested together.
+const filling = (seen: string[]): Partial<FlowExec> => ({
+  runPrompt: async (p, input, o) => {
+    const text = fill(p, input, o.state);
+    seen.push(`prompt:${text}`);
+    return text;
+  },
+});
+
+test("{{key}} reads a non-adjacent node's output", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "state",
+    nodes: [
+      node("a", "prompt", { prompt: "FACT", key: "research" }),
+      node("b", "prompt", { prompt: "MIDDLE" }),
+      node("c", "prompt", { prompt: "cite {{research}}" }),
+    ],
+    edges: [edge("a", "b"), edge("b", "c")],
+  };
+  const seen: string[] = [];
+  await runFlow(flow, stub(filling(seen)));
+  // c sees node a's output even though b ran in between and clobbered the edge.
+  expect(seen).toContain("prompt:cite FACT");
+});
+
+test("a node with no key is addressable by its id", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "default-key",
+    nodes: [node("a", "prompt", { prompt: "X" }), node("b", "prompt", { prompt: "got {{a}}" })],
+    edges: [edge("a", "b")],
+  };
+  const seen: string[] = [];
+  await runFlow(flow, stub(filling(seen)));
+  expect(seen).toContain("prompt:got X");
+});
+
+test("an unknown placeholder is left literal, and still counts as no-substitution", () => {
+  expect(subst("{{nope}}", "x", { a: "1" })).toBe("{{nope}}");
+  // Nothing resolved, so the input is appended rather than silently dropped.
+  expect(fill("write {{nope}}", "DATA")).toBe("write {{nope}}\n\nInput:\nDATA");
+  // A key that DOES resolve suppresses the append.
+  expect(fill("write {{a}}", "DATA", { a: "1" })).toBe("write 1");
+});
+
+test("a tool arg resolves {{key}} without growing (the ENAMETOOLONG guard)", () => {
+  expect(subst("hi.txt", "a very long previous output", { k: "v" })).toBe("hi.txt");
+  expect(subst("{{k}}.txt", "long", { k: "notes" })).toBe("notes.txt");
+});
+
+test("model output containing $& survives substitution", () => {
+  // A string replacement would expand $& to the matched text; the function
+  // replacer must not.
+  expect(subst("{{prev}}", "cost $& up 10%")).toBe("cost $& up 10%");
+});
+
+test("same key written twice in one batch resolves to the later node in queue order", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "collision",
+    nodes: [
+      node("s", "start"),
+      node("a", "prompt", { prompt: "FIRST", key: "shared" }),
+      node("b", "prompt", { prompt: "SECOND", key: "shared" }),
+      node("m", "merge"),
+      node("z", "prompt", { prompt: "saw {{shared}}" }),
+    ],
+    edges: [edge("s", "a"), edge("s", "b"), edge("a", "m"), edge("b", "m"), edge("m", "z")],
+  };
+  const seen: string[] = [];
+  await runFlow(flow, stub(filling(seen)));
+  expect(seen).toContain("prompt:saw SECOND");
+});
+
+// --- parallel supersteps ----------------------------------------------------
+
+test("fan-out branches run concurrently, not one after another", async () => {
+  // Both executors block until BOTH have entered. Under the old sequential
+  // loop the first one waits forever and this test times out.
+  let entered = 0;
+  let release!: () => void;
+  const both = new Promise<void>((r) => (release = r));
+  const flow: Flow = {
+    id: "f",
+    name: "parallel",
+    nodes: [
+      node("s", "start"),
+      node("a", "prompt", { prompt: "A" }),
+      node("b", "prompt", { prompt: "B" }),
+      node("m", "merge"),
+    ],
+    edges: [edge("s", "a"), edge("s", "b"), edge("a", "m"), edge("b", "m")],
+  };
+  const ex = stub({
+    runPrompt: async (p) => {
+      if (++entered === 2) release();
+      await both;
+      return p;
+    },
+  });
+  const out = await runFlow(flow, ex);
+  expect(entered).toBe(2);
+  expect(out).toContain("A");
+  expect(out).toContain("B");
+});
+
+test("two failures in one batch: both reported, blame is the first in queue order", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "double-fail",
+    nodes: [node("s", "start"), node("a", "tool", { tool: "nope_a" }), node("b", "tool", { tool: "nope_b" })],
+    edges: [edge("s", "a"), edge("s", "b")],
+  };
+  const events: FlowEvent[] = [];
+  const ex = stub({
+    runTool: async (name) => {
+      throw new Error(`no such tool: ${name}`);
+    },
+  });
+  const out = await runFlow(flow, ex, (e) => events.push(e));
+  expect(events.filter((e) => e.type === "node-error").length).toBe(2);
+  expect(events.filter((e) => e.type === "run-done").length).toBe(1);
+  expect(out).toContain("a failed"); // 'a' is queued first, so 'a' is blamed
+});
+
+// --- per-node model ---------------------------------------------------------
+
+test("data.model reaches the executor; unset stays undefined", async () => {
+  const flow: Flow = {
+    id: "f",
+    name: "models",
+    nodes: [
+      node("a", "prompt", { prompt: "A", model: "anthropic:claude-sonnet-5" }),
+      node("b", "prompt", { prompt: "B" }),
+    ],
+    edges: [edge("a", "b")],
+  };
+  const seenModels: (string | undefined)[] = [];
+  await runFlow(flow, stub({ runPrompt: async (p, _i, o) => (seenModels.push(o.model), p) }));
+  expect(seenModels).toEqual(["anthropic:claude-sonnet-5", undefined]);
 });

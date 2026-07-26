@@ -1,7 +1,18 @@
 import os from "node:os";
 import type { Tool } from "ai";
 import type { LanguageModel } from "ai";
-import { loadConfig, resolveModels, setUserModel, type Config } from "./config.js";
+import {
+  loadConfig,
+  resolveModels,
+  setUserModel,
+  splitSpec,
+  probeContext,
+  tableContext,
+  autoBudget,
+  CHARS_PER_TOKEN,
+  PROVIDER_KEY,
+  type Config,
+} from "./config.js";
 import { builtinTools, loadUserTools } from "./tools.js";
 import { loadMcpTools } from "./mcp.js";
 import { loadSkills, skillsPromptSection, useSkillTool } from "./skills.js";
@@ -69,10 +80,28 @@ export type Built = {
   memoryIds: string[];
   runFlow: FlowRunner; // execute a saved flow (Flows page / scheduler)
   toolArgs: Record<string, ArgSpec[]>; // per-tool argument fields, for the Flows canvas
-  hasKey: () => boolean; // DEEPSEEK key present?
+  hasKey: () => boolean; // key for the CURRENT model's provider present?
   setModel: (id: string) => void; // switch + persist (keeps history)
   refreshModels: () => void; // re-resolve after a key was added
 };
+
+// Size the history budget from the model's real context window, then ask the
+// provider for the true number and re-size if it differs. Synchronous first so
+// startup never waits on a network call; the probe is fire-and-forget and a
+// failure silently keeps the table value.
+function applyContext(agent: Agent, config: Config): void {
+  const spec = config.model;
+  const set = (tokens: number) =>
+    agent.setContext(
+      config.historyBudget ?? autoBudget(tokens), // an explicit budget always wins
+      tokens * CHARS_PER_TOKEN,
+      spec,
+    );
+  set(tableContext(spec));
+  void probeContext(spec, config).then((tokens) => {
+    if (config.model === spec) set(tokens); // ignore a probe that lost a race with /model
+  });
+}
 
 // Assemble the agent + tools + system prompt from config/skills/memory. Shared
 // by every frontend. The `models` array is a single shared reference — mutating
@@ -112,7 +141,21 @@ export async function buildAgent(): Promise<Built> {
 
   // Tool nodes get subagentTools, so a flow can't call run_flow (depth 1).
   // Prompt nodes get no tools at all — see flows.ts.
-  const runFlow = flowRunner({ models, tools: subagentTools });
+  // modelFor resolves a node that pinned its own model; `models` (mutated in
+  // place by swap) still supplies the default, so /model moves the whole flow.
+  // ponytail: builds a provider client per call — it's one object; memoize if it
+  // ever shows up in a profile.
+  const runFlow = flowRunner({
+    models,
+    tools: subagentTools,
+    modelFor: (id) => {
+      try {
+        return resolveModels({ ...config, model: id, fallbackModel: [] })[0];
+      } catch {
+        return undefined; // no key for that provider yet — ask() reports it
+      }
+    },
+  });
 
   const tools: Record<string, Tool> = {
     ...baseTools,
@@ -128,7 +171,10 @@ export async function buildAgent(): Promise<Built> {
     models.length = 0;
     models.push(...resolveModels({ ...config, model: ids[0], fallbackModel: ids.slice(1) }));
     agent.setModels(models); // resets modelIdx; same shared reference
+    applyContext(agent, config); // a 200k model and a 1M model get different budgets
   };
+
+  applyContext(agent, config);
 
   return {
     agent,
@@ -138,11 +184,11 @@ export async function buildAgent(): Promise<Built> {
     memoryIds: memories.map((m) => m.id),
     runFlow,
     toolArgs: toolArgSpecs(subagentTools),
-    hasKey: () => !!process.env.DEEPSEEK_API_KEY,
+    hasKey: () => !!process.env[PROVIDER_KEY[splitSpec(config.model)[0]]],
     setModel: (id) => {
+      config.model = id; // before swap: applyContext reads config.model
       swap([id]);
       setUserModel(id);
-      config.model = id;
     },
     refreshModels: () => swap([config.model]),
   };

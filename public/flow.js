@@ -37,9 +37,11 @@ const shellCls = (data, selected) =>
     BORDER[data._s] || (selected ? "border-signal" : "border-line")
   } ${data._s === "running" ? "animate-pulse" : ""}`;
 
+// A pinned model shows on the node body, not just in the inspector — otherwise
+// "why is this step on a different model" needs a click to answer.
 const kindLabel = (data, kind) =>
   h("div", { className: "font-mono text-[10px] text-dim mb-1 flex justify-between gap-2" },
-    h("span", null, kind),
+    h("span", { className: "truncate" }, data.model ? `${kind} · ${data.model}` : kind),
     data._ms != null ? h("span", null, `${(data._ms / 1000).toFixed(1)}s`) : null,
   );
 
@@ -145,7 +147,7 @@ const nodeTypes = { start: StartNode, prompt: PromptNode, if: IfNode, switch: Sw
 const field = "w-full bg-raise border border-line rounded-lg px-2 py-1.5 text-xs text-paper outline-none focus:border-dim";
 const btn = "px-2.5 py-1.5 rounded-lg border border-line text-xs hover:border-dim transition disabled:opacity-40";
 
-function Inspector({ node, onChange, onDelete, toolNames, toolArgs }) {
+function Inspector({ node, onChange, onDelete, toolNames, toolArgs, models }) {
   if (!node)
     return h(
       "div",
@@ -153,6 +155,8 @@ function Inspector({ node, onChange, onDelete, toolNames, toolArgs }) {
       h("p", null, "Select a node to edit it."),
       h("p", null, "Each node is a step: it takes the previous node's output as input and passes its own on."),
       h("p", null, h("span", { className: "font-mono text-paper" }, "{{prev}}"), " in any field is replaced by that input. Without it, the input is appended."),
+      h("p", null, h("span", { className: "font-mono text-paper" }, "{{key}}"), " reads any earlier node's output — give that node an output key."),
+      h("p", null, "Branches that split apart run at the same time, so a branch can't read its sibling — only steps that finished before it."),
     );
   const d = node.data || {};
   const set = (patch) => onChange({ ...d, ...patch });
@@ -239,7 +243,7 @@ function Inspector({ node, onChange, onDelete, toolNames, toolArgs }) {
         toolNames.map((t) => h("option", { key: t, value: t }, t)),
       ),
       spec.length
-        ? h("div", { key: "al", className: "text-[10px] text-dim" }, "{{prev}} inserts the previous node's output.")
+        ? h("div", { key: "al", className: "text-[10px] text-dim" }, "{{prev}} inserts the previous node's output; {{key}} inserts any earlier node's.")
         : null,
       ...spec.map((a) =>
         h(
@@ -268,6 +272,41 @@ function Inspector({ node, onChange, onDelete, toolNames, toolArgs }) {
       ),
     );
   }
+
+  // Per-node model: the cheap one can classify a switch while the reviewer node
+  // runs on the strong one. Blank = whatever the app's model is set to, so it
+  // keeps following /model.
+  if (node.type === "prompt" || node.type === "if" || node.type === "switch")
+    rows.push(
+      h(
+        "label",
+        { key: "mo", className: "flex flex-col gap-1" },
+        h("span", { className: "font-mono text-[10px] text-dim" }, "model"),
+        h(
+          "select",
+          { className: field, value: d.model || "", onChange: (e) => set({ model: e.target.value || undefined }) },
+          h("option", { value: "" }, "flow default"),
+          (models || []).map((m) => h("option", { key: m, value: m }, m)),
+        ),
+      ),
+    );
+
+  // Output key: what later nodes read this node's output by. Blank works — the
+  // node's id is the key — but nobody wants to type "k3f9a2b" in a prompt.
+  if (node.type !== "start" && node.type !== "end")
+    rows.push(
+      h(
+        "label",
+        { key: "k", className: "flex flex-col gap-1" },
+        h("span", { className: "font-mono text-[10px] text-dim" }, "output key — later nodes read it as {{key}}"),
+        h("input", {
+          className: field + " font-mono",
+          placeholder: node.id, // the default. letters, digits and _ only
+          value: d.key || "",
+          onChange: (e) => set({ key: e.target.value }),
+        }),
+      ),
+    );
 
   rows.push(h("button", { key: "del", className: btn + " text-bad border-bad/40", onClick: onDelete }, "Delete node"));
   return h("div", { className: "p-4 flex flex-col gap-2" }, rows);
@@ -313,6 +352,7 @@ function FlowsPage() {
   const [selected, setSelected] = useState(null);
   const [toolNames, setToolNames] = useState([]);
   const [toolArgs, setToolArgs] = useState({});
+  const [models, setModels] = useState([]);
   const [entries, setEntries] = useState([]);
   const [runState, setRunState] = useState("idle"); // idle | running | paused
   const [marks, setMarks] = useState({}); // nodeId → { _s, _ms, _branch }
@@ -324,6 +364,7 @@ function FlowsPage() {
       .then((s) => {
         setToolNames(s.toolNames || []);
         setToolArgs(s.toolArgs || {});
+        setModels(s.models || []);
       });
 
     const push = (e) => setEntries((l) => [...l.slice(-199), e]);
@@ -536,6 +577,7 @@ function FlowsPage() {
         node: sel,
         toolNames,
         toolArgs,
+        models,
         onChange: (data) => setNodes((ns) => ns.map((n) => (n.id === selected ? { ...n, data } : n))),
         onDelete: () => {
           setNodes((ns) => ns.filter((n) => n.id !== selected));

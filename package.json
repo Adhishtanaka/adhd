@@ -13,7 +13,10 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.91",
     "@ai-sdk/deepseek": "^1.0.20",
+    "@ai-sdk/google": "^2.0.85",
+    "@ai-sdk/openai-compatible": "^1.0.46",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "ai": "^5",
     "marked": "^15",

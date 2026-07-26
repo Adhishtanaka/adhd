@@ -7,17 +7,19 @@ import { setSubagentSink } from "./subagent.js";
 import { setRenderSink } from "./render.js";
 import { sanitize } from "./sanitize.js";
 import { listFailures, clearFailures, removeDomain } from "./failcache.js";
-import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, mcpServers, setMcpServers, type KeyName } from "./config.js";
+import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, mcpServers, setMcpServers, setCustomBaseURL, loadConfig, type KeyName } from "./config.js";
 import { setJobSinks, type FinishedJob } from "./jobs.js";
 import { loadMemories, saveMemory, deleteMemory } from "./memory.js";
 import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./scheduler.js";
 import { loadFlows, saveFlows, seedExamples, toolArgSpecs, RunControl, type Flow } from "./flows.js";
+import { seedMcpDefaults } from "./mcp.js";
 
 // The AI SDK leaves some internal promises unawaited on error; swallow the stray
 // rejections so they don't crash the server (real errors reach the client).
 process.on("unhandledRejection", () => {});
 
 loadSecretsIntoEnv(); // hydrate API keys from ~/.adhd/secrets.json before building
+seedMcpDefaults(); // first run: wire up Chrome — must precede buildAgent's loadMcpTools
 const built = await buildAgent();
 seedExamples(); // first run: put a few worked examples on the Flows page
 
@@ -137,6 +139,9 @@ async function runTurn(message: string) {
           break;
         case "usage":
           broadcast("usage", { total: e.total });
+          break;
+        case "context":
+          broadcast("context", e.stats);
           break;
         case "info":
           broadcast("info", { message: e.message });
@@ -288,9 +293,28 @@ function settingsFragment(): string {
   return (
     group(
       "Keys",
-      "the model and web search",
-      `<p class="muted">Stored in <span class="mono">~/.adhd/secrets.json</span> (chmod 600). Keys never leave this machine.</p>
-      <div class="settings-section">${keyRows}</div>`,
+      "models and web search",
+      `<p class="muted">Stored in <span class="mono">~/.adhd/secrets.json</span> (chmod 600). Keys never leave this machine.
+       You only need a key for the provider you actually use — a model is named <span class="mono">provider:id</span>
+       (<span class="mono">anthropic:claude-sonnet-5</span>), and a bare id means DeepSeek.</p>
+      <div class="settings-section">${keyRows}</div>
+      <h2>Any other model <span class="muted">(not in the dropdown)</span></h2>
+      <div class="settings-section">
+        <div class="row">
+          <span class="mono">model</span>
+          <form hx-post="/model" hx-target="#settings" hx-swap="innerHTML" class="inline">
+            <input name="id" placeholder="e.g. anthropic:claude-fable-5" value="" autocomplete="off" />
+            <button class="btn">Use</button>
+          </form>
+        </div>
+        <div class="row">
+          <span class="mono">custom: base URL</span>
+          <form hx-post="/base-url" hx-target="#settings" hx-swap="innerHTML" class="inline">
+            <input name="url" placeholder="https://openrouter.ai/api/v1" value="${loadConfig().customBaseURL ?? ""}" autocomplete="off" />
+            <button class="btn">Save</button>
+          </form>
+        </div>
+      </div>`,
       true,
     ) +
     group(
@@ -605,6 +629,17 @@ Bun.serve({
         }
         case "/new":
           built.agent.reset();
+          broadcast("context", built.agent.stats());
+          return noContent();
+        // "Compact now": squeeze the thread in place instead of throwing it away
+        // (/new). Paired with the context strip — once you can see the bar near
+        // the marker, this is the move that isn't "start over".
+        case "/compact":
+          if (busy) return Response.json({ error: "busy" }, { status: 409 });
+          await built.agent.compact((e) => {
+            if (e.type === "info") broadcast("info", { message: e.message });
+            else if (e.type === "context") broadcast("context", e.stats);
+          });
           return noContent();
         case "/model":
           if (b.id) {
@@ -617,6 +652,14 @@ Bun.serve({
           built.refreshModels();
           return html(settingsFragment());
         }
+        // The "custom:" provider's endpoint — OpenRouter, Groq, Ollama, LM Studio.
+        case "/base-url":
+          if (b.url) {
+            setCustomBaseURL(b.url.trim());
+            built.config.customBaseURL = b.url.trim();
+            built.refreshModels();
+          }
+          return html(settingsFragment());
         case "/memory":
           saveMemory({ id: b.id, type: b.type || "note", description: b.description, body: b.body });
           return html(memoryFragment());
@@ -694,6 +737,7 @@ Bun.serve({
           // directly (the agent-control ones aren't usable without a model turn)
           toolNames: built.toolNames.filter((t) => !["spawn_agent", "loop_task", "run_flow", "render_ui", "ask_user"].includes(t)),
           toolArgs: built.toolArgs, // arg fields per tool, read off each tool's schema
+          context: built.agent.stats(), // seeds the context strip on page load
           maptilerKey: process.env.MAPTILER_KEY ?? "",
         });
     }

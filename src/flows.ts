@@ -29,6 +29,14 @@ export type FlowNode = {
     tool?: string;
     args?: Record<string, string>;
     useMemory?: boolean;
+    // key (any node): the name later nodes read this node's output by, as
+    // {{key}}. Unset = the node's id, so every output is addressable whether or
+    // not anyone named it — `key` only buys a name a human can type.
+    key?: string;
+    // model (prompt/if/switch): run THIS step on a different LLM — a cheap one
+    // to classify a switch, the strong one for the reviewer node. Unset = the
+    // flow's default, which follows whatever /model is set to.
+    model?: string;
   };
 };
 export type FlowEdge = { id?: string; source: string; target: string; sourceHandle?: string | null };
@@ -130,7 +138,9 @@ export function seedExamples(): void {
 // its own web research. If you want a tool run, that's a tool node, wired in.
 // Data moves along the edges: each node's output becomes the next node's input,
 // substituted for {{prev}} or appended when there's no placeholder.
-const MAX_STEPS = 30; // cycle guard: a loop in the graph stops here
+// Cycle guard, counted in NODE RUNS rather than rounds — otherwise a five-wide
+// fan-out would quietly buy itself 30 rounds of five model calls each.
+const MAX_STEPS = 30;
 
 export const CANCELLED = "flow-cancelled";
 
@@ -156,7 +166,8 @@ export class RunControl {
     this.paused = false;
     this.ac.abort();
   }
-  /** Between-nodes checkpoint: blocks while paused, throws once stopped. */
+  /** Per-node checkpoint: blocks while paused, throws once stopped. Awaited as
+   *  the first thing in every node, so a pause lands before any node-start. */
   async gate(): Promise<void> {
     while (this.paused && !this.cancelled) await new Promise((r) => setTimeout(r, 150));
     if (this.cancelled) throw new Error(CANCELLED);
@@ -171,27 +182,54 @@ export type FlowEvent =
   | { type: "run-done"; output: string }
   | { type: "run-stopped" };
 
-export type FlowExec = {
-  runPrompt: (prompt: string, input: string, signal: AbortSignal, useMemory: boolean) => Promise<string>;
-  runIf: (question: string, input: string, signal: AbortSignal) => Promise<boolean>;
-  // Returns the chosen case label — one of `cases`, or "else" if none fit.
-  runSwitch: (cases: string[], input: string, signal: AbortSignal) => Promise<string>;
-  runTool: (name: string, args: Record<string, string>, input: string) => Promise<string>;
+/** Every output the run has produced, keyed by data.key (or the node id). */
+export type FlowState = Record<string, string>;
+
+/** Everything a node hands its executor besides the text it was given. */
+export type NodeOpts = {
+  signal: AbortSignal;
+  // A snapshot as of the start of this superstep — a node cannot see a sibling
+  // running beside it right now. Readonly because it belongs to runFlow.
+  state: Readonly<FlowState>;
+  model?: string; // node.data.model
+  useMemory?: boolean; // node.data.useMemory
 };
 
-/** Just the placeholder swap — used for tool args, which must NOT grow silently. */
-export function subst(text: string, input: string): string {
-  return text.replaceAll("{{prev}}", input);
+// One options object rather than four positional args: useMemory was already
+// the fourth, and state + model would have made it six.
+export type FlowExec = {
+  runPrompt: (prompt: string, input: string, o: NodeOpts) => Promise<string>;
+  runIf: (question: string, input: string, o: NodeOpts) => Promise<boolean>;
+  // Returns the chosen case label — one of `cases`, or "else" if none fit.
+  runSwitch: (cases: string[], input: string, o: NodeOpts) => Promise<string>;
+  runTool: (name: string, args: Record<string, string>, input: string, o: NodeOpts) => Promise<string>;
+};
+
+/**
+ * Just the placeholder swap — used for tool args, which must NOT grow silently.
+ * {{prev}} is the input on the edge; {{anythingElse}} is another node's output
+ * by key. An unknown key is left alone on purpose: blanking it hides the typo,
+ * and a flow that writes a mustache template to a file has every right to a
+ * literal {{name}} in its content. (Function replacer, not a string one: `$&`
+ * and `$'` in a model's output would otherwise be read as capture syntax.)
+ */
+export function subst(text: string, input: string, state: Readonly<FlowState> = {}): string {
+  return text.replace(/\{\{(\w+)\}\}/g, (m, k: string) =>
+    k === "prev" ? input : k in state ? state[k]! : m,
+  );
 }
 
 /**
- * Prompt/if text: {{prev}} → the previous output, else the input is appended so
- * the step sees it. Tool ARGS use subst() instead — auto-appending there turned
- * a `path: "hi.txt"` into "hi.txt\n\nInput:\n…" and blew up with ENAMETOOLONG.
+ * Prompt/if text: a placeholder is substituted, and if the text had none the
+ * input is appended so the step still sees it. Tool ARGS use subst() instead —
+ * auto-appending there turned a `path: "hi.txt"` into "hi.txt\n\nInput:\n…" and
+ * blew up with ENAMETOOLONG. "Had none" is now "substitution changed nothing",
+ * which covers {{prev}} and {{key}} in one test: a node that composes its own
+ * inputs by key does not want the last arrival stapled on the end as well.
  */
-export function fill(text: string, input: string): string {
-  if (text.includes("{{prev}}")) return subst(text, input);
-  return input ? `${text}\n\nInput:\n${input}` : text;
+export function fill(text: string, input: string, state: Readonly<FlowState> = {}): string {
+  const out = subst(text, input, state);
+  return out === text && input ? `${text}\n\nInput:\n${input}` : out;
 }
 
 /** Canvas fields are text; tool schemas want real types. "5" → 5, "true" → true. */
@@ -257,9 +295,10 @@ const label = (n: FlowNode): string => {
 };
 
 /**
- * Walk the graph, one node at a time. Pure traversal — executors are injected,
- * so tests drive it without a model. Emits an event per node so the UI can show
- * what actually happened instead of a wall of tool names.
+ * Walk the graph one SUPERSTEP at a time: every node currently queued runs at
+ * once, then their results are applied in queue order. Pure traversal —
+ * executors are injected, so tests drive it without a model. Emits an event per
+ * node so the UI can show what actually happened instead of a wall of tool names.
  */
 export async function runFlow(
   flow: Flow,
@@ -280,6 +319,18 @@ export async function runFlow(
   // Inputs that have arrived on a node's incoming edges but not yet consumed.
   const received = new Map<string, { label: string; output: string }[]>();
   const queue: FlowNode[] = [entry];
+  // Every output so far, so node 5 can read node 1. The lone `out` on an edge
+  // only ever reached the next node, and a non-merge node keeps just the LAST
+  // arrival — everything earlier went on the floor.
+  //
+  // ponytail: a flat string→string bag, last write wins, and it dies with the
+  // run. No typed schema, no per-key reducers, no checkpoints, no time-travel.
+  // Upgrade path in order of likely need: (1) a reducer table keyed by state key
+  // so a node can append instead of clobber — it slots into the one line in the
+  // apply pass that assigns state[...]; (2) checkpointing = snapshot
+  // {state, received, queue, steps} per superstep, a persistence feature bolted
+  // onto that same loop rather than a rewrite of it.
+  const state: FlowState = {};
   let result = "";
 
   const deliver = (targetId: string, srcLabel: string, output: string) => {
@@ -292,7 +343,56 @@ export async function runFlow(
     if (arr.length >= need) queue.push(target);
   };
 
-  for (let step = 0; step < MAX_STEPS; step++) {
+  // One node run, with its failure TAGGED rather than thrown: a sibling blowing
+  // up must not reject the batch out from under the nodes that succeeded, and
+  // must not decide the run's outcome just by failing first on the wire.
+  type Ran = { node: FlowNode; ms: number } & (
+    | { ok: true; out: string; branch?: string }
+    | { ok: false; message: string }
+  );
+  const run = async (node: FlowNode, input: string): Promise<Ran> => {
+    // The edge handle to leave by. undefined = fan out to every out-edge;
+    // set = a branch (if → "yes"/"no", switch → a case label).
+    let branch: string | undefined;
+    let out = input;
+    const started = Date.now();
+    const o: NodeOpts = {
+      signal: ctl.signal,
+      state,
+      model: node.data.model,
+      useMemory: !!node.data.useMemory,
+    };
+    try {
+      await ctl.gate();
+      emit({ type: "node-start", id: node.id, kind: node.type, label: label(node) });
+      switch (node.type) {
+        case "start":
+        case "merge":
+        case "end":
+          break; // start marks the entry; merge's output IS the joined input; end carries it out
+        case "prompt":
+          out = await ex.runPrompt(node.data.prompt ?? "", input, o);
+          break;
+        case "if":
+          branch = (await ex.runIf(node.data.question ?? "", input, o)) ? "yes" : "no";
+          break;
+        case "switch":
+          branch = await ex.runSwitch(node.data.cases ?? [], input, o);
+          break;
+        case "tool":
+          out = await ex.runTool(node.data.tool ?? "", node.data.args ?? {}, input, o);
+          break;
+        default:
+          throw new Error(`unknown node type "${(node as FlowNode).type}"`);
+      }
+      return { node, ms: Date.now() - started, ok: true, out, branch };
+    } catch (e) {
+      return { node, ms: Date.now() - started, ok: false, message: (e as Error)?.message ?? String(e) };
+    }
+  };
+
+  let steps = 0;
+  while (steps < MAX_STEPS) {
     if (!queue.length) {
       // Queue drained. A merge behind a pruned if/switch branch may be holding
       // partial inputs that will never complete — fire it with what it has so
@@ -306,70 +406,74 @@ export async function runFlow(
       }
       queue.push(stuck);
     }
-    const node = queue.shift()!;
+    // splice, not shift: the whole queue is one superstep. Clamped to what's
+    // left of the budget so a wide batch can't overshoot the cap.
+    const batch = queue.splice(0, MAX_STEPS - steps);
+    steps += batch.length;
 
-    // Consume this node's arrived inputs. A merge joins them into labeled
-    // sections so a downstream prompt can tell the sources apart; any other
-    // node takes the most recent input, as before.
-    const ins = received.get(node.id) ?? [];
-    received.set(node.id, []);
-    const input =
-      node.type === "merge"
-        ? ins.map((r, i) => `## ${i + 1} · ${r.label}\n${r.output}`).join("\n\n")
-        : ins[ins.length - 1]?.output ?? "";
+    // Inputs are consumed HERE — synchronously, in queue order — so two nodes in
+    // one batch can't race for the same `received` list. Only the executor call
+    // is concurrent. A merge joins its inputs into labeled sections so a
+    // downstream prompt can tell the sources apart; any other node takes the
+    // most recent input, as before.
+    const runs = batch.map((node) => {
+      const ins = received.get(node.id) ?? [];
+      received.set(node.id, []);
+      return run(
+        node,
+        node.type === "merge"
+          ? ins.map((r, i) => `## ${i + 1} · ${r.label}\n${r.output}`).join("\n\n")
+          : ins[ins.length - 1]?.output ?? "",
+      );
+    });
 
-    // The edge handle to leave by. undefined = fan out to every out-edge;
-    // set = a branch (if → "yes"/"no", switch → a case label).
-    let branch: string | undefined;
-    let out = input;
-    const started = Date.now();
-    try {
-      await ctl.gate();
-      emit({ type: "node-start", id: node.id, kind: node.type, label: label(node) });
-      switch (node.type) {
-        case "start":
-        case "merge":
-          break; // start marks the entry; merge's output IS the joined input
-        case "end":
-          emit({ type: "node-done", id: node.id, ms: Date.now() - started, output: input });
-          emit({ type: "run-done", output: input });
-          return input;
-        case "prompt":
-          out = await ex.runPrompt(node.data.prompt ?? "", input, ctl.signal, !!node.data.useMemory);
-          break;
-        case "if":
-          branch = (await ex.runIf(node.data.question ?? "", input, ctl.signal)) ? "yes" : "no";
-          break;
-        case "switch":
-          branch = await ex.runSwitch(node.data.cases ?? [], input, ctl.signal);
-          break;
-        case "tool":
-          out = await ex.runTool(node.data.tool ?? "", node.data.args ?? {}, input);
-          break;
-        default:
-          throw new Error(`unknown node type "${(node as FlowNode).type}"`);
+    let failure: string | undefined;
+    let ended: string | undefined;
+    for (const r of await Promise.all(runs)) {
+      if (!r.ok) {
+        if (r.message === CANCELLED || ctl.state === "stopped") {
+          emit({ type: "run-stopped" });
+          return result;
+        }
+        // One bad node ends the run — continuing would feed garbage downstream.
+        // Its siblings already ran (nothing un-calls a model), so they keep their
+        // events; the earliest failure IN QUEUE ORDER is the one reported, so a
+        // rerun blames the same node instead of whichever timed out first.
+        emit({ type: "node-error", id: r.node.id, ms: r.ms, message: r.message });
+        failure ??= `${r.node.id} failed: ${r.message}`;
+        continue;
       }
-      result = out;
-      emit({ type: "node-done", id: node.id, ms: Date.now() - started, output: out, branch });
-    } catch (e) {
-      const message = (e as Error)?.message ?? String(e);
-      if (message === CANCELLED || ctl.state === "stopped") {
-        emit({ type: "run-stopped" });
-        return result;
+      emit({ type: "node-done", id: r.node.id, ms: r.ms, output: r.out, branch: r.branch });
+      // Writes land here, in queue order, NOT inside the node — so "last writer
+      // wins" is a property of the graph, not of whose HTTP response came back
+      // first. Everything in this batch read `state` as it was before the batch.
+      state[r.node.data.key || r.node.id] = r.out;
+      // ponytail: a fan-out that ends without a merge/end reports the LAST
+      // branch. Wire a Merge node if you want them joined — every branch is
+      // still in `state` under its key, it just isn't the return value.
+      result = r.out;
+      if (r.node.type === "end") {
+        ended ??= r.out;
+        continue; // end terminates: nothing leaves it
       }
-      // One bad node ends the run — continuing would feed garbage downstream.
-      emit({ type: "node-error", id: node.id, ms: Date.now() - started, message });
-      emit({ type: "run-done", output: result });
-      return `${node.id} failed: ${message}`;
+      const from = flow.edges.filter((e) => e.source === r.node.id);
+      // Plain node: every out-edge (fan-out). Branch node: the edges whose handle
+      // matches the chosen label ("yes"/"no" or a case), falling back to "else".
+      const matched =
+        r.branch === undefined ? from : from.filter((e) => (e.sourceHandle ?? "yes") === r.branch);
+      const live =
+        r.branch !== undefined && !matched.length ? from.filter((e) => e.sourceHandle === "else") : matched;
+      const lbl = label(r.node);
+      for (const e of live) deliver(e.target, lbl, r.out);
     }
-
-    const from = flow.edges.filter((e) => e.source === node.id);
-    // Plain node: every out-edge (fan-out). Branch node: the edges whose handle
-    // matches the chosen label ("yes"/"no" or a case), falling back to "else".
-    const matched = branch === undefined ? from : from.filter((e) => (e.sourceHandle ?? "yes") === branch);
-    const live = branch !== undefined && !matched.length ? from.filter((e) => e.sourceHandle === "else") : matched;
-    const lbl = label(node);
-    for (const e of live) deliver(e.target, lbl, out);
+    if (failure) {
+      emit({ type: "run-done", output: result });
+      return failure;
+    }
+    if (ended !== undefined) {
+      emit({ type: "run-done", output: ended });
+      return ended;
+    }
   }
   const capped = `${result}\n\n(stopped at the ${MAX_STEPS}-step cap — check for a cycle)`;
   emit({ type: "run-done", output: capped });
@@ -401,11 +505,27 @@ export type FlowRunner = (
  * are a single generateText call, which is what keeps a flow deterministic and
  * stops a step from running off on its own research spree.
  */
-export function flowRunner(opts: { models: LanguageModel[]; tools: Record<string, Tool> }): FlowRunner {
-  const ask = async (prompt: string, signal: AbortSignal, system = NODE_SYSTEM): Promise<string> => {
-    const model = opts.models[0];
-    if (!model) throw new Error("no model configured — add your API key in Settings");
-    const { text } = await generateText({ model, system, prompt, abortSignal: signal, maxRetries: 1 });
+export function flowRunner(opts: {
+  models: LanguageModel[];
+  tools: Record<string, Tool>;
+  // Per-node model lookup, injected rather than resolved here so flows.ts never
+  // reaches for config (and so tests stay model-free). Only called for a node
+  // that actually names a model.
+  modelFor?: (id: string) => LanguageModel | undefined;
+}): FlowRunner {
+  const ask = async (prompt: string, o: NodeOpts, system = NODE_SYSTEM): Promise<string> => {
+    // opts.models is the shared array setup.ts mutates IN PLACE on a /model
+    // swap, so read [0] per call — the flow's default keeps following the app's
+    // current model. A node with data.model is pinned and ignores the swap on
+    // purpose: "the cheap one classifies, the strong one reviews" is the point.
+    // A pinned node also skips config.fallbackModel — no rate-limit hop, which
+    // is right when the whole reason to pin was "use exactly this one".
+    const model = o.model && opts.modelFor ? opts.modelFor(o.model) : opts.models[0];
+    if (!model)
+      throw new Error(
+        o.model ? `unknown model "${o.model}"` : "no model configured — add your API key in Settings",
+      );
+    const { text } = await generateText({ model, system, prompt, abortSignal: o.signal, maxRetries: 1 });
     return text.trim();
   };
 
@@ -413,36 +533,40 @@ export function flowRunner(opts: { models: LanguageModel[]; tools: Record<string
     runFlow(
       flow,
       {
-        runPrompt: (prompt, input, signal, useMemory) =>
+        runPrompt: (prompt, input, o) =>
           // Prompt nodes have no `recall` tool, so when memory is toggled on we
           // fold the saved memories straight into the system prompt (loaded fresh
           // per node so an earlier step's `remember` is visible to a later one).
-          ask(fill(prompt, input), signal, useMemory ? NODE_SYSTEM + memoryBlock() : NODE_SYSTEM),
-        runIf: async (question, input, signal) => {
-          const a = await ask(fill(`${question}\n\nAnswer with exactly "yes" or "no" and nothing else.`, input), signal);
+          ask(fill(prompt, input, o.state), o, o.useMemory ? NODE_SYSTEM + memoryBlock() : NODE_SYSTEM),
+        runIf: async (question, input, o) => {
+          const a = await ask(
+            fill(`${question}\n\nAnswer with exactly "yes" or "no" and nothing else.`, input, o.state),
+            o,
+          );
           return /^\W*yes/i.test(a);
         },
-        runSwitch: async (cases, input, signal) => {
+        runSwitch: async (cases, input, o) => {
           const list = cases.length ? cases : ["else"];
           const a = await ask(
             fill(
               `Classify the input into exactly one of these categories: ${list.join(", ")}. ` +
                 `Reply with only the category name, exactly as written. If none fit, reply "else".`,
               input,
+              o.state,
             ),
-            signal,
+            o,
           );
           // Take the model's answer if it names a real case; otherwise "else".
           const clean = a.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
           return list.find((c) => clean.includes(c.toLowerCase())) ?? "else";
         },
-        runTool: async (name, args, input) => {
+        runTool: async (name, args, input, o) => {
           const t = opts.tools[name] as Tool & { execute?: (a: unknown, o: unknown) => Promise<unknown> };
           if (!t?.execute) throw new Error(`no such tool: ${name}`);
           const filled = Object.fromEntries(
             Object.entries(args)
               .filter(([k]) => k)
-              .map(([k, v]) => [k, coerce(expandHome(subst(String(v), input)))]),
+              .map(([k, v]) => [k, coerce(expandHome(subst(String(v), input, o.state)))]),
           );
           // Run the args through the tool's own schema — that's what applies
           // defaults (skipping it is why web_search once fired with type

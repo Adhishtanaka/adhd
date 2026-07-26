@@ -94,6 +94,24 @@
           --c-positive: 22 163 74; --c-negative: 220 38 38; --c-info: 124 58 237;
         }
       }
+      /* ---- context strip ---- */
+      /* One colour per message kind, reusing the palette so the strip reads as
+         part of the app in both themes rather than a foreign chart. */
+      #ctx { --ctx-system: rgb(var(--c-text-dim)); --ctx-summary: rgb(var(--c-info));
+             --ctx-user: rgb(var(--c-accent-2)); --ctx-tool: rgb(var(--c-accent));
+             --ctx-assistant: rgb(var(--c-positive)); }
+      #ctx-bar > span { min-width: 2px; transition: flex-grow .3s ease; }
+      /* Past 75% of the budget, compaction is close — say so in colour rather
+         than making the user read the numbers. */
+      #ctx.near #ctx-bar > span { filter: saturate(.4); }
+      #ctx.near #ctx-read { color: rgb(var(--c-negative)); }
+      .ctx-key { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+      .ctx-key[data-k="system"] { background: var(--ctx-system); }
+      .ctx-key[data-k="summary"] { background: var(--ctx-summary); }
+      .ctx-key[data-k="user"] { background: var(--ctx-user); }
+      .ctx-key[data-k="tool"] { background: var(--ctx-tool); }
+      .ctx-key[data-k="assistant"] { background: var(--ctx-assistant); }
+
       :root {
         --font-display: "Space Grotesk", ui-sans-serif, system-ui;
         --font-mono: ui-monospace, Menlo, monospace;
@@ -250,6 +268,21 @@
           <div id="status" class="hidden max-w-3xl w-full mx-auto px-5 pt-2 font-mono text-xs text-dim flex items-center gap-2">
             <svg class="text-dim spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="40 16"/></svg>
             <span id="status-text">thinking</span>
+          </div>
+          <!-- Context strip: what's actually filling the window right now. One
+               segment per message, width proportional to its size, so a runaway
+               tool result is visible as a fat block instead of a surprise. -->
+          <div id="ctx" class="hidden max-w-3xl w-full mx-auto px-5 pt-2">
+            <div id="ctx-bar" class="flex gap-px h-1.5 rounded-full overflow-hidden bg-raise" title=""></div>
+            <div class="flex items-center gap-3 pt-1.5 font-mono text-[10px] text-dim">
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="system"></i>system</span>
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="summary"></i>summary</span>
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="user"></i>you</span>
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="tool"></i>tools</span>
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="assistant"></i>reply</span>
+              <span id="ctx-read" class="ml-auto"></span>
+              <button id="ctx-compact" class="text-dim hover:text-paper transition underline decoration-dotted">Compact now</button>
+            </div>
           </div>
           <form id="composer" class="max-w-3xl w-full mx-auto px-5 py-3">
             <div class="flex gap-2 items-end bg-surface border border-line rounded-3xl px-2 py-1.5 focus-within:border-dim transition-colors">

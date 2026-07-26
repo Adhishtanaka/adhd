@@ -7,8 +7,26 @@ export type AgentEvent =
   | { type: "tool-call"; id: string; name: string; args: unknown }
   | { type: "tool-result"; id: string; result: unknown }
   | { type: "usage"; total: number }
+  | { type: "context"; stats: ContextStats }
   | { type: "info"; message: string }
   | { type: "error"; message: string };
+
+// What's actually occupying the context right now, so the chat window can show
+// it instead of leaving the user to guess. Sizes are CHARS — the same unit the
+// budget is in, because there's no tokenizer here (see HISTORY_BUDGET).
+export type ContextSeg = {
+  kind: "system" | "summary" | "user" | "assistant" | "tool";
+  name?: string; // tool name, for colouring the strip by tool
+  size: number;
+};
+export type ContextStats = {
+  used: number; // chars in play right now (system + summary + history)
+  budget: number; // compaction fires past this
+  window: number; // the model's real context, in chars — the strip's denominator
+  model: string;
+  compactions: number;
+  segments: ContextSeg[];
+};
 
 const MAX_RETRIES = 2;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -41,12 +59,17 @@ function isBadToolCall(e: unknown): boolean {
 export type Agent = {
   send(userText: string, onEvent: (e: AgentEvent) => void): Promise<void>;
   setModels(models: LanguageModel[]): void; // hot-swap the model chain (/model)
+  setContext(budget: number, window: number, model: string): void; // re-size after a model swap
+  stats(): ContextStats; // current occupancy, for the strip + /state
+  compact(onEvent: (e: AgentEvent) => void): Promise<void>; // "Compact now" button
   reset(): void; // clear conversation history (new chat)
 };
 
-// Keep requests small — some models/tiers have a tiny tokens-per-minute cap, and
-// raw tool output (web pages, file dumps) piles up fast. Budget is in characters
-// (~4 per token). ponytail: char budget, not a real tokenizer.
+// Keep requests small — raw tool output (web pages, file dumps) piles up fast,
+// and history is re-sent every turn, so this is a cost lever as much as a limit.
+// Budget is in characters (~4 per token) and is normally sized from the model's
+// real context window (config.autoBudget); this is only the floor when nothing
+// told us better. ponytail: char budget, not a real tokenizer.
 const HISTORY_BUDGET = 8000;
 // Once history passes the budget, compaction trims it down to this fraction (not
 // merely under budget) so the next turn has headroom and doesn't re-compact
@@ -103,13 +126,31 @@ async function summarizeMessages(
 const modelName = (m: LanguageModel): string =>
   typeof m === "string" ? m : ((m as any).modelId ?? "fallback model");
 
+// One history message → one strip segment. Tool results ride in "tool" messages;
+// an assistant message carrying tool calls is labelled by the first one so the
+// strip shows which tool cost the space rather than a nameless block.
+function segment(m: ModelMessage): ContextSeg {
+  const size = msgSize(m);
+  if (m.role === "user") return { kind: "user", size };
+  const parts = Array.isArray(m.content) ? (m.content as any[]) : [];
+  const call = parts.find((p) => p?.type === "tool-call" || p?.type === "tool-result");
+  if (m.role === "tool" || call) return { kind: "tool", name: call?.toolName, size };
+  return { kind: "assistant", size };
+}
+
 export function createAgent(opts: {
   models: LanguageModel[]; // primary first; later entries are rate-limit fallbacks
   tools: Record<string, Tool>;
   system: string;
   historyBudget?: number;
+  contextWindow?: number; // model's real window in CHARS; strip denominator only
 }): Agent {
-  const budget = opts.historyBudget ?? HISTORY_BUDGET;
+  // Mutable: a model swap re-sizes both (setContext), since a 200k model and a
+  // 1M model should not be held to the same budget.
+  let budget = opts.historyBudget ?? HISTORY_BUDGET;
+  let window = opts.contextWindow ?? budget * 4;
+  let modelId = "";
+  let compactions = 0;
   const history: ModelMessage[] = [];
   // Running summary of everything trimmed out of `history`, folded into the system
   // prompt so the model still "remembers" the gist instead of forgetting it. Grows
@@ -120,20 +161,44 @@ export function createAgent(opts: {
   let modelIdx = 0;
   let models = opts.models; // mutable so /model can hot-swap without losing history
 
+  function stats(): ContextStats {
+    const segments: ContextSeg[] = [{ kind: "system", size: opts.system.length }];
+    if (summary) segments.push({ kind: "summary", size: summary.length });
+    for (const m of history) segments.push(segment(m));
+    return {
+      used: segments.reduce((s, g) => s + g.size, 0),
+      budget,
+      window,
+      model: modelId,
+      compactions,
+      segments,
+    };
+  }
+
   // When history outgrows the budget, summarize the oldest messages into `summary`
   // rather than dropping them outright. On any summarizer failure (e.g. the compaction
   // call itself is rate-limited) the messages stay dropped — no worse than before.
-  async function compact(onEvent: (e: AgentEvent) => void): Promise<void> {
-    const total = summary.length + history.reduce((s, m) => s + msgSize(m), 0);
-    if (total <= budget) return;
-    const dropped = splitOldest(history, budget * KEEP_RATIO);
-    if (!dropped.length) return;
+  // `force` is the "Compact now" button: compact even when under budget.
+  async function compact(onEvent: (e: AgentEvent) => void, force = false): Promise<void> {
+    const historySize = history.reduce((s, m) => s + msgSize(m), 0);
+    if (!force && summary.length + historySize <= budget) return;
+    // splitOldest only ever trims `history`, so a forced compaction has to aim
+    // at the history size — aiming at the total (which includes an 8k system
+    // prompt) meant "Compact now" quietly dropped nothing on a short thread.
+    const dropped = splitOldest(history, (force ? historySize : budget) * KEEP_RATIO);
+    if (!dropped.length) {
+      if (force) onEvent({ type: "info", message: "nothing to compact yet" });
+      onEvent({ type: "context", stats: stats() });
+      return;
+    }
     try {
       summary = cap(await summarizeMessages(summary, dropped, models[modelIdx], budget), 4000);
+      compactions++;
       onEvent({ type: "info", message: `compacted ${dropped.length} earlier message${dropped.length > 1 ? "s" : ""} into a summary` });
     } catch {
       // Dropped stays dropped — same outcome as the old hard-trim. Run continues.
     }
+    onEvent({ type: "context", stats: stats() });
   }
 
   return {
@@ -141,9 +206,17 @@ export function createAgent(opts: {
       models = m;
       modelIdx = 0;
     },
+    setContext(b, w, model) {
+      budget = b;
+      window = w;
+      modelId = model;
+    },
+    stats,
+    compact: (onEvent) => compact(onEvent, true),
     reset() {
       history.length = 0;
       summary = "";
+      compactions = 0;
     },
     async send(userText, onEvent) {
       const mark = history.length; // roll back to here if the turn errors with no progress
@@ -192,6 +265,7 @@ export function createAgent(opts: {
           void Promise.resolve(result.response).catch(() => {}); // avoid unhandled rejection
           if (streamError) throw streamError;
           history.push(...pendingTurn);
+          onEvent({ type: "context", stats: stats() });
           return;
         } catch (e) {
           const wait = rateLimitWait(e);
@@ -216,6 +290,7 @@ export function createAgent(opts: {
           if (pendingTurn.length) history.push(...pendingTurn);
           else history.length = mark;
           onEvent({ type: "error", message: (e as Error).message });
+          onEvent({ type: "context", stats: stats() });
           return;
         }
       }

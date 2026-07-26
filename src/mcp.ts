@@ -1,8 +1,10 @@
+import { existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { dynamicTool, jsonSchema, type Tool } from "ai";
 import { cap, confirmAction } from "./tools.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, setMcpServers, HOME_ROOT } from "./config.js";
 
 // MCP (modelcontextprotocol.io) servers, so any tool someone else already wrote
 // works here without adhd shipping a connector for it. Configured in config.json:
@@ -23,6 +25,31 @@ export type McpServer = {
   // only reads (a docs lookup, a search index) and may run unprompted.
   trust?: "ask" | "read";
 };
+
+// --- the one server adhd ships with ----------------------------------------
+// Chrome DevTools MCP, so adhd can drive a real browser out of the box instead
+// of only fetching HTML. Seeded ONCE, ever — same deal as the example flows: if
+// you delete it, it stays deleted rather than coming back every launch.
+//
+// trust "read" means no approval card per call. That's the usable setting for a
+// server with ~26 tools, and the deliberate trade: a page adhd just fetched can
+// steer the browser without asking, since MCP output doesn't pass through
+// sanitize.ts. Flip it to "ask" in Settings → MCP if that matters to you.
+const CHROME: McpServer = {
+  command: "npx",
+  args: ["-y", "chrome-devtools-mcp@latest"],
+  trust: "read",
+};
+const SEEDED_MARK = join(HOME_ROOT, ".mcp-seeded");
+
+/** Seed the Chrome server once, ever. Call before loadMcpTools(). */
+export function seedMcpDefaults(): void {
+  if (existsSync(SEEDED_MARK)) return;
+  mkdirSync(HOME_ROOT, { recursive: true });
+  const servers = loadConfig().mcpServers ?? {};
+  if (!servers.chrome) setMcpServers({ ...servers, chrome: CHROME });
+  writeFileSync(SEEDED_MARK, new Date().toISOString());
+}
 
 // Tool names must survive the provider's [A-Za-z0-9_-] check and stay unique
 // across servers, so they're namespaced rather than used bare.

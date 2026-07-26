@@ -866,6 +866,8 @@ function connect() {
     tokens += d.total;
     tokensEl.textContent = tokens >= 1000 ? (tokens / 1000).toFixed(1) + "k" : tokens;
   });
+  // Occupancy, not spend — the header counter answers the other question.
+  on("context", (d) => renderContext(d));
   on("busy", (d) => setBusy(d.busy));
   on("model", (d) => (modelEl.value = d.model));
   on("confirm", (d) => confirmCard(d));
@@ -1036,6 +1038,7 @@ newChatBtn.onclick = async () => {
   setHome(true);
   tokens = 0;
   tokensEl.textContent = "0";
+  ctxEl.classList.add("hidden"); // server also broadcasts a fresh context on /new
 };
 
 document.addEventListener("keydown", (e) => {
@@ -1064,6 +1067,51 @@ function wireSettings() {
     };
   }
 }
+// --- context strip ----------------------------------------------------------
+// One <span> per message, flex-grow set to its size in chars, so the browser
+// does the percentage maths and this stays arithmetic-free. The bar is measured
+// against the BUDGET (what actually triggers compaction) rather than the raw
+// window — at a 1M-token window the used slice would be a couple of invisible
+// pixels. The window is in the readout instead.
+const ctxEl = document.getElementById("ctx");
+const ctxBar = document.getElementById("ctx-bar");
+const ctxRead = document.getElementById("ctx-read");
+const NEAR = 0.75; // past this, compaction is close — colour says so
+
+const short = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n));
+
+function renderContext(s) {
+  if (!s || !s.budget) return;
+  // Nothing but the system prompt yet: no signal worth the vertical space.
+  const empty = s.segments.every((g) => g.kind === "system");
+  ctxEl.classList.toggle("hidden", empty);
+  if (empty) return;
+
+  ctxBar.replaceChildren();
+  for (const g of s.segments) {
+    const b = document.createElement("span");
+    b.style.flexGrow = g.size;
+    b.style.background = `var(--ctx-${g.kind})`;
+    b.title = `${g.name || g.kind} · ${short(g.size)} chars`;
+    ctxBar.append(b);
+  }
+  // Trailing spacer = headroom left in the budget. Transparent, so the track
+  // colour shows through as "free".
+  const free = document.createElement("span");
+  free.style.flexGrow = Math.max(0, s.budget - s.used);
+  free.style.background = "transparent";
+  ctxBar.append(free);
+
+  const pct = s.used / s.budget;
+  ctxEl.classList.toggle("near", pct >= NEAR);
+  const windowChars = s.window ? ` · ${short(s.window / 4)} tok window` : "";
+  const compacted = s.compactions ? ` · ${s.compactions} compaction${s.compactions > 1 ? "s" : ""}` : "";
+  ctxRead.textContent = `${short(s.used)} / ${short(s.budget)} chars${windowChars}${compacted}`;
+  ctxBar.title = `${Math.round(pct * 100)}% of the history budget used`;
+}
+
+document.getElementById("ctx-compact").onclick = () => post("/compact", {});
+
 async function refreshState() {
   try {
     const s = await (await fetch("/state")).json();
@@ -1077,9 +1125,17 @@ async function refreshState() {
         modelEl.append(o);
       });
     }
+    // A model typed into Settings won't be in the suggestion list; add it so the
+    // dropdown shows what's actually running instead of going blank.
+    if (s.model && !Array.from(modelEl.options).some((o) => o.value === s.model)) {
+      const o = document.createElement("option");
+      o.value = o.textContent = s.model;
+      modelEl.append(o);
+    }
     modelEl.value = s.model;
     nokey.classList.toggle("hidden", s.hasKey);
     sendBtn.disabled = !s.hasKey;
+    renderContext(s.context);
   } catch {}
 }
 modelEl.onchange = () => post("/model", { id: modelEl.value });
