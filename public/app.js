@@ -1109,10 +1109,16 @@ function renderContext(s) {
 
   const pct = s.used / s.budget;
   ctxEl.classList.toggle("near", pct >= NEAR);
-  const windowChars = s.window ? ` · ${short(s.window / 4)} tok window` : "";
+  // Fixed overhead is worth naming: it's the part compaction can never shrink,
+  // and the only lever on it is switching capabilities off in Settings.
+  const fixed = s.segments
+    .filter((g) => g.kind === "system" || g.kind === "schemas")
+    .reduce((a, g) => a + g.size, 0);
   const compacted = s.compactions ? ` · ${s.compactions} compaction${s.compactions > 1 ? "s" : ""}` : "";
-  ctxRead.textContent = `${short(s.used)} / ${short(s.budget)} chars${windowChars}${compacted}`;
-  ctxBar.title = `${Math.round(pct * 100)}% of the history budget used`;
+  ctxRead.textContent = `${short(s.used)} / ${short(s.budget)} · ${short(fixed)} fixed${compacted}`;
+  ctxBar.title =
+    `${Math.round(pct * 100)}% of budget. ${short(fixed)} chars of that is the system prompt plus ` +
+    `tool schemas, sent every message — switch capabilities off in Settings to shrink it.`;
 }
 
 // --- task list --------------------------------------------------------------

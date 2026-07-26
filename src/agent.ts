@@ -186,6 +186,17 @@ export function createAgent(opts: {
   let models = opts.models; // mutable so /model can hot-swap without losing history
   let tools = opts.tools; // mutable so capability toggles apply on the next turn
 
+  // System prompt + tool schemas: paid on every request and not something
+  // compaction can touch. It only shrinks by switching capabilities off.
+  const overhead = (): number => opts.system.length + schemaSize(tools);
+
+  // What history is actually allowed, once the fixed overhead has taken its cut
+  // of the budget. Without this the bar and the compaction trigger disagreed —
+  // the strip could sit at 90% while compact() never fired, because one counted
+  // the overhead and the other didn't. The floor keeps a huge tool set from
+  // squeezing history to nothing.
+  const historyBudget = (): number => Math.max(budget - overhead(), Math.round(budget * 0.2));
+
   function stats(): ContextStats {
     const segments: ContextSeg[] = [
       { kind: "system", size: opts.system.length },
@@ -207,9 +218,10 @@ export function createAgent(opts: {
   // rather than dropping them outright. On any summarizer failure (e.g. the compaction
   // call itself is rate-limited) the messages stay dropped — no worse than before.
   async function compact(onEvent: (e: AgentEvent) => void): Promise<void> {
+    const room = historyBudget();
     const historySize = history.reduce((s, m) => s + msgSize(m), 0);
-    if (summary.length + historySize <= budget) return;
-    const dropped = splitOldest(history, budget * KEEP_RATIO);
+    if (summary.length + historySize <= room) return;
+    const dropped = splitOldest(history, room * KEEP_RATIO);
     if (!dropped.length) return;
     try {
       summary = cap(await summarizeMessages(summary, dropped, models[modelIdx], budget), 4000);
