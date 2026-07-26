@@ -2,7 +2,7 @@
 
 adhd is your own AI assistant that runs entirely on your machine. It plans, writes, researches, handles files, remembers what matters, and automates the things you do over and over, built for everyday work, not for writing code. 
 
-It runs on Bun, talks to DeepSeek through the AI SDK, and serves a ChatGPT-style web UI on 127.0.0.1. From a single chat box it reads and writes files, runs shell commands, searches and fetches the web, remembers facts across sessions, schedules tasks, and delegates work to subagents, with every tool call shown live as it happens. And when a task is worth repeating, you can draw it once as a visual Flow and run it on demand, on a schedule, or by asking in chat.
+It runs on Bun, talks to DeepSeek (or Anthropic, Gemini, or anything OpenAI-compatible) through the AI SDK, and serves a ChatGPT-style web UI on 127.0.0.1. From a single chat box it reads and writes files, runs shell commands, searches and fetches the web, remembers facts across sessions, schedules tasks, and delegates work to subagents, with every tool call shown live as it happens. And when a task is worth repeating, you can draw it once as a visual Flow and run it on demand, on a schedule, or by asking in chat.
 
 ```
 ▌ you  find nearby restaurants
@@ -22,7 +22,7 @@ bun install
 bun start          # serves + opens http://127.0.0.1:8787
 ```
 
-Add your DeepSeek key in **Settings** (or drop it in `.env` first — see [Configuration](#configuration)), and start chatting. On first launch adhd seeds a few example Flows so there's something to run.
+Add your DeepSeek key in **Settings** (or drop it in `.env` first — see [Configuration](#configuration)), and start chatting. You only need a key for the provider you actually use. On first launch adhd seeds a few example Flows and wires up [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) so it can drive a real browser out of the box.
 
 - **Standalone binary:** `bun run build` compiles `./adhd` (run it from a directory that has `public/` beside it).
 - **Tests:** `bun test`.
@@ -35,7 +35,8 @@ Add your DeepSeek key in **Settings** (or drop it in `.env` first — see [Confi
 - **Shows your own local files** (images, video, docs) inline, from folders you explicitly allow.
 - **Remembers** durable facts across sessions as [OKF](https://okf.md/spec/) markdown under `~/.adhd/memory/`.
 - **Schedules tasks** that fire while adhd is open, with desktop notifications.
-- **Builds visual Flows** — prompt, condition, and tool steps you wire, save, run (with pause/stop), schedule, or trigger from chat.
+- **Builds visual Flows** — prompt, condition, and tool steps you wire, save, run (with pause/stop), schedule, or trigger from chat. Branches run in parallel, any step can read any earlier step's output, and each step can pin its own model.
+- **Shows what's filling the context** — a live strip above the composer, one segment per message coloured by kind, measured against a budget sized from the model's *real* context window (asked of the provider where it publishes one). Compact in place instead of starting over.
 - **Loads skills** — instruction packs the model picks up on demand.
 - **Delegates** big self-contained subtasks to subagents, or grinds a hard task across passes with `loop_task`.
 - **Light, dark, and system** themes.
@@ -129,6 +130,8 @@ flowchart TD
 
 Guards: `maxRetries: 0` (adhd owns retries, not the SDK), `stepCountIs(12)` max tool steps per turn, and history that's **compacted, not dropped** — when it outgrows `historyBudget` the oldest messages are summarized into a running summary (folded into the system prompt) instead of being discarded, so the model keeps the gist of the earlier conversation. Tool-call/result pairs stay intact either way.
 
+`historyBudget` sizes itself to the model rather than being a fixed number: adhd asks the provider how big the context window is (Anthropic and Google publish it; DeepSeek doesn't, so a table covers it) and budgets a quarter of it, capped at 400k chars ≈ 100k tokens. History is re-sent every turn, so "fill the window" is a bill, not a free win — the cap is the point. Set `historyBudget` explicitly to override. The strip above the composer shows the result live, and **Compact now** squeezes the thread without clearing it.
+
 Long tool calls don't hold the turn open: a tool that blows its deadline hands back a "backgrounded" note so the UI goes idle and you can keep chatting. When the work lands, its result wakes the agent as a fresh turn — and several jobs finishing close together are coalesced into a single turn, so a burst of backgrounded fetches produces one reply, not one per job.
 
 ## Flows
@@ -138,6 +141,12 @@ A **Flow** is a saved workflow you draw on a canvas — [n8n](https://n8n.io)-st
 The canvas is [React Flow](https://reactflow.dev), loaded from a pinned CDN via an import map — no build step, in keeping with the rest of the frontend. The graph runs **server-side** in [`flows.ts`](src/flows.ts) and is stored as JSON in `~/.adhd/flows.json`.
 
 Data flows along the edges: each node takes the previous node's output as its input and passes its own output on. `{{prev}}` anywhere in a field is replaced by that input. Without a placeholder, the input is appended (for prompt/if/switch text) or left untouched (for tool arguments).
+
+Every node's output is also kept for the whole run, so a later step can read one that isn't next to it. Give a node an **output key** and any field downstream can use `{{thatKey}}` — a reviewer node can quote the research node three steps back. Unset, the key is the node's own id. An unknown `{{name}}` is left as-is rather than blanked, so writing a template to a file still works.
+
+Branches that split apart **run at the same time**: one superstep runs everything currently ready, then applies the results in order. A three-way fan-out costs about as long as its slowest branch, not the sum. The trade is that a branch can't read its own siblings — `{{key}}` only sees steps that finished before this one — and last-write-wins on a shared key is resolved by position in the graph, not by whichever model replied first.
+
+Prompt, condition, and switch nodes can each **pin their own model** (`anthropic:claude-sonnet-5` for the reviewer, something cheap for a switch). Leave it on *flow default* and the node follows whatever model the app is set to; pin it and it stays put.
 
 ```mermaid
 flowchart LR
@@ -180,7 +189,9 @@ Runs stream over the same SSE channel as chat: each node lights up, reports its 
 - Ask in chat — the agent calls the `run_flow` tool by name.
 - Schedule it — add a task whose prompt is `flow:<id>` (Settings → Schedule).
 
-Example Flows (Morning brief, Umbrella check, File → todo list) are seeded **once**, on first run only. Delete them and they stay deleted; your own Flows are never touched.
+Example Flows (Morning brief, Umbrella check, File → todo list) are seeded **once**, on first run only. Delete them and they stay deleted; your own Flows are never touched. The Chrome MCP server is seeded the same way.
+
+Chrome ships trusted (`"trust": "read"`), so its tools run without an approval card — otherwise ~26 tools would each prompt. That's the deliberate trade: a page adhd just fetched could steer the browser without asking. Set it to `"ask"` in **Settings → MCP servers** if you'd rather confirm each call.
 
 ## Tools
 
@@ -227,10 +238,12 @@ Merged from `~/.adhd/config.json`, then `./.adhd/config.json` (project wins). Al
 
 ```jsonc
 {
-  "model": "deepseek-v4-flash",  // or "deepseek-v4-pro"
-  "fallbackModel": [],           // string or string[]; [] = no fallback
+  "model": "deepseek-v4-flash",  // "<provider>:<id>"; a bare id means DeepSeek
+                                 // anthropic: · google: · custom: · deepseek:
+  "fallbackModel": [],           // string or string[]; [] = no fallback. May mix providers
   "baseURL": "https://api.deepseek.com",
-  "historyBudget": 60000,        // max chars of chat history per request (~4 chars/token)
+  "customBaseURL": "https://openrouter.ai/api/v1", // the "custom:" provider's endpoint
+  // "historyBudget": 60000,     // omit to auto-size from the model's real context window
   "systemPrompt": "...",         // replaces BASE_SYSTEM
   "localRoots": ["/path/..."],   // folders the local-file tools may read (default: home)
   "allowedCommands": ["bash:git"],// "always allow" keys added via the approval prompt
