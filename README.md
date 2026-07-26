@@ -36,10 +36,33 @@ Add your DeepSeek key in **Settings** (or drop it in `.env` first — see [Confi
 - **Remembers** durable facts across sessions as [OKF](https://okf.md/spec/) markdown under `~/.adhd/memory/`.
 - **Schedules tasks** that fire while adhd is open, with desktop notifications.
 - **Builds visual Flows** — prompt, condition, and tool steps you wire, save, run (with pause/stop), schedule, or trigger from chat. Branches run in parallel, any step can read any earlier step's output, and each step can pin its own model.
-- **Shows what's filling the context** — a live strip above the composer, one segment per message coloured by kind, measured against a budget sized from the model's *real* context window (asked of the provider where it publishes one). Compact in place instead of starting over.
+- **Shows what's filling the context** — a live strip under the composer, one segment per message coloured by kind, measured against a budget sized from the model's *real* context window (asked of the provider where it publishes one). Tool schemas are counted too, because they're usually the biggest slice.
+- **Switches capabilities off** — files, shell, web, memory, skills, MCP, subagents and the rest each toggle independently, removing their tools *and* their share of the system prompt from every request. Takes effect on the next message.
+- **Keeps a visible task list** — for anything multi-step, adhd writes its plan above the input and ticks items off as it goes.
 - **Loads skills** — instruction packs the model picks up on demand.
 - **Delegates** big self-contained subtasks to subagents, or grinds a hard task across passes with `loop_task`.
 - **Light, dark, and system** themes.
+
+### Context is the budget
+
+Tool schemas ship on **every** request, so they dominate long before the conversation does. Measured with everything on:
+
+| | chars per request, before you type |
+|---|---|
+| system prompt | ~8,700 |
+| tool schemas — 50 tools, 29 of them Chrome MCP | ~27,000 |
+| **fixed overhead** | **~35,700** |
+| with MCP switched off (21 tools) | **~16,100** |
+
+That's what **Settings → Capabilities** is for: each group you switch off drops its tools and its slice of the prompt. Compaction can only shrink the conversation, never this — the strip shows the fixed part separately so you can see which one is the problem.
+
+### Permissions
+
+**Settings → Permissions** picks when adhd stops to ask:
+
+- **Ask every time** — every side effect gets a card, ignoring both the always-allow list and any `trust: "read"` MCP server. The card drops its "always allow" button too, so a stray click can't re-arm it.
+- **Normal** (default) — asks before anything that changes your machine, minus what you've already allowed.
+- **Approve everything** — never asks. For a sandbox you don't mind losing.
 
 Anything that changes your machine (`bash`, `powershell`, `run_script`) asks for a yes/no in the UI first — including inside subagents, Flows, and scheduled runs. Approving with "always allow" remembers that *program* (`bash:git`), never a whole command line, and is offered only for a single plain command — anything that could smuggle a second one (`ls && rm -rf ~`) is one-time approval only. A prompt nobody answers within 5 minutes declines itself, so a scheduled run that fires while you're away fails safely instead of hanging.
 
@@ -191,7 +214,9 @@ Runs stream over the same SSE channel as chat: each node lights up, reports its 
 
 Example Flows (Morning brief, Umbrella check, File → todo list) are seeded **once**, on first run only. Delete them and they stay deleted; your own Flows are never touched. The Chrome MCP server is seeded the same way.
 
-Chrome ships trusted (`"trust": "read"`), so its tools run without an approval card — otherwise ~26 tools would each prompt. That's the deliberate trade: a page adhd just fetched could steer the browser without asking. Set it to `"ask"` in **Settings → MCP servers** if you'd rather confirm each call.
+Chrome ships trusted (`"trust": "read"`), so its tools run without an approval card — otherwise ~29 tools would each prompt. That's the deliberate trade: a page adhd just fetched could steer the browser without asking. Set it to `"ask"` in **Settings → MCP servers**, or set Permissions to *Ask every time*, which overrides every server's trust.
+
+Expanding a server in **Settings → MCP servers** lists the tools it actually offers, each with its own switch — useful when you want a server's read tools but not the ones that click things. Individual switches apply on the next message; adding or removing a whole server still needs a restart.
 
 ## Tools
 
@@ -247,6 +272,9 @@ Merged from `~/.adhd/config.json`, then `./.adhd/config.json` (project wins). Al
   "systemPrompt": "...",         // replaces BASE_SYSTEM
   "localRoots": ["/path/..."],   // folders the local-file tools may read (default: home)
   "allowedCommands": ["bash:git"],// "always allow" keys added via the approval prompt
+  "permissionMode": "normal",    // "ask" | "normal" | "auto" (Settings → Permissions)
+  "capabilities": { "shell": false }, // switch feature groups off; unlisted = on
+  "disabledTools": ["chrome_click"],  // individual tools, MCP ones included
   "mcpServers": {                // stdio MCP servers; their tools load at startup
     "notes": { "command": "npx", "args": ["-y", "@some/notes-mcp"], "trust": "ask" }
   }
