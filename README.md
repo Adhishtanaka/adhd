@@ -73,7 +73,7 @@ One Bun process serves the UI, streams each turn over SSE, and runs the agent in
 
 ```mermaid
 flowchart TB
-  subgraph browser["Browser — public/"]
+  subgraph client["Browser — public/"]
     ui["index.html + app.js<br/>SSE transcript · composer · spec renderer"]
     flow["flow.js<br/>React Flow canvas (Flows)"]
   end
@@ -182,10 +182,10 @@ flowchart LR
   t --> sw{"Switch<br/>sentiment"}
   sw -- "positive" --> p["Prompt<br/>thank them"]
   sw -- "negative" --> n["Prompt<br/>apologize + refund"]
-  sw -- "else" --> o["Prompt<br/>acknowledge"]
+  sw -- "else" --> oth["Prompt<br/>acknowledge"]
   p --> e(["End"])
   n --> e
-  o --> e
+  oth --> e
 ```
 
 | Node | What it does |
