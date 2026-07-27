@@ -7,8 +7,7 @@ import { promisify } from "node:util";
 import { tool, type Tool } from "ai";
 import { z } from "zod";
 import { ROOTS, allowedRoots, isUnderRoots, allowedCommands, permissionMode } from "./config.js";
-import { rankChunks, extractImages } from "./extract.js";
-import { recordFailure, isBadDomain, domainOf } from "./failcache.js";
+import { isBadDomain, domainOf } from "./failcache.js";
 import { withDeadline } from "./jobs.js";
 
 // How long a tool may hold the turn open before it finishes in the background.
@@ -107,19 +106,19 @@ export function setAskUser(fn: AskUser) {
 
 // Keep tool output small — it all lands back in the model's context and a tiny
 // tokens-per-minute budget fills up fast. ponytail: crude char caps beat dumps.
-const MAX_OUT = 2500;
+export const MAX_OUT = 2500;
 export function cap(s: string, max = MAX_OUT): string {
   return s.length <= max ? s : s.slice(0, max) + `\n…[truncated ${s.length - max} chars]`;
 }
-// Squeeze the noise agent-browser leaves in scraped markdown (blank-line runs,
-// trailing spaces) so a fetched page costs fewer tokens.
-function cleanMarkdown(s: string): string {
+// Squeeze the noise out of scraped markdown (blank-line runs, trailing spaces)
+// so a fetched page costs fewer tokens.
+export function cleanMarkdown(s: string): string {
   return s.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // Serper (google.serper.dev) search. One tool, `type` picks the vertical /
 // endpoint. Returns a compact list — every row carries a URL so the model can
-// then web_fetch the one it wants. ponytail: hand-formatted lines beat dumping
+// then read the one it wants with `browser`. ponytail: hand-formatted lines beat dumping
 // raw JSON into the model's tiny token budget.
 export const SERPER_TYPES = ["search", "images", "videos", "places", "shopping", "news"] as const;
 export type SerperType = (typeof SERPER_TYPES)[number];
@@ -353,7 +352,7 @@ export function builtinTools(): Record<string, Tool> {
     }),
     web_search: tool({
       description:
-        "Search Google via Serper when you DON'T already have a URL — to find the right pages, images, videos, local places/shops, or news for a query. type: 'search' (default, web results), 'images', 'videos', 'places' (locations/shops, pass `location` like 'Colombo, Sri Lanka'), 'shopping', 'news'. Returns a compact list where each row has a URL. Pick the best result and call web_fetch on its URL to read it. If you already know the exact URL, skip this and call web_fetch directly.",
+        "Search Google via Serper when you DON'T already have a URL — to find the right pages, images, videos, local places/shops, or news for a query. type: 'search' (default, web results), 'images', 'videos', 'places' (locations/shops, pass `location` like 'Colombo, Sri Lanka'), 'shopping', 'news'. Returns a compact list where each row has a URL. Pick the best result and call `browser` with action:'read' on its URL. If you already know the exact URL, skip this and call `browser` directly.",
       inputSchema: z.object({
         q: z.string(),
         type: z.enum(SERPER_TYPES).default("search"),
@@ -381,54 +380,6 @@ export function builtinTools(): Record<string, Tool> {
         } catch (e) {
           return `serper ${type} failed: ${(e as Error).message}`;
         }
-      },
-    }),
-    web_fetch: tool({
-      description:
-        "Fetch a KNOWN URL and return its readable content as cleaned markdown. Use when you have the URL — e.g. one the user gave you, or a link web_search returned. ALWAYS pass `query` describing what you're looking for on the page; only the most relevant sections are returned (the rest of the page is dropped to save context). To discover URLs first, use web_search.",
-      inputSchema: z.object({
-        url: z.string().url(),
-        query: z.string().optional().describe("what you're looking for on this page — returns only the most relevant sections"),
-      }),
-      execute: async ({ url, query }) => {
-        // agent-browser `read` extracts clean markdown (no Chrome for static
-        // pages). execFile, not a shell, so the model's URL can't inject.
-        // It exits non-zero on failure but still prints the JSON error to
-        // stdout, so parse stdout whether or not the process threw.
-        let stdout: string;
-        try {
-          ({ stdout } = await execFileAsync("agent-browser", ["read", url, "--json"], {
-            maxBuffer: 20 * 1024 * 1024,
-            timeout: 30_000, // fail fast — a hung page shouldn't stall the whole turn
-          }));
-        } catch (e: any) {
-          if (e.code === "ENOENT")
-            return "web_fetch needs agent-browser — install it with `npm install -g agent-browser`.";
-          stdout = e.stdout ?? "";
-        }
-        let r: any;
-        try {
-          r = JSON.parse(stdout);
-        } catch {
-          recordFailure(url, "unreadable response");
-          return `could not read ${url}. Try a different URL — this does NOT mean you lack network access.`;
-        }
-        if (r.success) {
-          const clean = cleanMarkdown(String(r.data?.content ?? ""));
-          // Query-aware: keep only the paragraphs that matter. Falls back to
-          // head-truncation when no query or nothing matches.
-          const focused = query ? rankChunks(clean, query, MAX_OUT) : "";
-          // Surface page images (with alt) so the model can show relevant ones —
-          // but only ones whose URL actually serves an image (drop dead/HTML links).
-          const imgs = await keepRealImages(extractImages(clean));
-          const imgList = imgs.length
-            ? `\n\nImages:\n${imgs.map((i) => `- ${i.alt}: ${i.src}`).join("\n")}`
-            : "";
-          return cap(focused || clean) + imgList;
-        }
-        // Be specific: a dead host is not "no internet", or the model gives up.
-        recordFailure(url, String(r.error ?? "fetch failed"));
-        return `could not read ${url}: ${r.error}. The host may be down or the URL wrong — try a different URL. This does NOT mean you lack network access.`;
       },
     }),
     search_files: tool({
@@ -489,7 +440,6 @@ export function builtinTools(): Record<string, Tool> {
   return {
     ...t,
     web_search: deadlined(t.web_search, SLOW.net, (a) => `web_search: ${a.q}`),
-    web_fetch: deadlined(t.web_fetch, SLOW.net, (a) => `web_fetch: ${a.url}`),
     search_files: deadlined(t.search_files, SLOW.net, (a) => `search_files: ${a.query}`),
   };
 }

@@ -26,6 +26,7 @@ import { spawnAgentTool, reportSubagent } from "./subagent.js";
 import { flowRunner, runFlowTool, toolArgSpecs, type FlowRunner, type ArgSpec } from "./flows.js";
 import { loopTaskTool } from "./loop.js";
 import { renderUiTool, catalogPromptSection } from "./render.js";
+import { browserTools } from "./browser.js";
 import { createAgent, type Agent } from "./agent.js";
 
 export const BASE_SYSTEM =
@@ -36,9 +37,10 @@ export const BASE_SYSTEM =
   "answer directly otherwise. If a URL or command fails, try an alternative (e.g. a different " +
   "API) rather than assuming you have no access. " +
   "Web research discipline: use web_search MINIMALLY. Default to a SINGLE web_search call — read the " +
-  "snippets it returns, and only web_fetch a page (at most one, always with a `query`) when the snippets " +
-  "don't already answer it. A second search is a last resort, not a habit. Do NOT keep re-searching, do NOT fetch many pages, and " +
-  "NEVER web_fetch a search-engine results URL (that's what web_search is for). Then STOP and answer. " +
+  "snippets it returns, and only read a page with `browser` action:'read' (at most one, always with a `query`) when the " +
+  "snippets don't already answer it. A second search is a last resort, not a habit. Do NOT keep re-searching, do NOT read many pages, and " +
+  "NEVER read a search-engine results URL (that's what web_search is for). Then STOP and answer. " +
+  "When a page needs interaction rather than just reading, use `browser`: 'snapshot' to get element uids, then 'fill'/'click'/'press', then 'read' or 'screenshot' for the result. " +
   "Always finish a turn by telling the user, in plain language, what you found — never end on a bare " +
   "sequence of tool calls with no answer. " +
   "Shell/diagnostic discipline: be economical here too. When inspecting the system (disk usage, processes, " +
@@ -122,7 +124,7 @@ const TOOL_CAP: Record<string, keyof Capabilities> = {
   read_file: "files", write_file: "files", list_dir: "files", grep: "files",
   glob: "files", search_files: "files",
   bash: "shell", powershell: "shell", run_script: "shell",
-  web_search: "web", web_fetch: "web",
+  web_search: "web", browser: "web",
   remember: "memory", recall: "memory",
   use_skill: "skills",
   schedule: "schedule",
@@ -135,7 +137,7 @@ const TOOL_CAP: Record<string, keyof Capabilities> = {
 /**
  * Drop tools whose capability is off, plus any switched off by name.
  * `mcpNames` is passed in because MCP tool names aren't knowable statically —
- * without it, switching MCP off left every chrome_* tool live, since they match
+ * without it, switching MCP off left a foreign server's tools live, since they match
  * nothing in TOOL_CAP and so fell through to "always on".
  */
 function allowed(
@@ -167,6 +169,7 @@ export async function buildAgent(): Promise<Built> {
   // so turning MCP back on after starting with it off does need a restart.
   const allBase: Record<string, Tool> = {
     ...builtinTools(),
+    ...browserTools(),
     use_skill: useSkillTool(skills),
     ...memoryTools(),
     ...scheduleTools(),

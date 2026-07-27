@@ -12,7 +12,7 @@ import { setJobSinks, type FinishedJob } from "./jobs.js";
 import { loadMemories, saveMemory, deleteMemory } from "./memory.js";
 import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./scheduler.js";
 import { loadFlows, saveFlows, seedExamples, toolArgSpecs, RunControl, type Flow } from "./flows.js";
-import { seedMcpDefaults, mcpCatalog } from "./mcp.js";
+import { migrateMcpDefaults, mcpCatalog } from "./mcp.js";
 import { todoItems, setTodoSink, resetTodos } from "./todo.js";
 
 // The AI SDK leaves some internal promises unawaited on error; swallow the stray
@@ -20,7 +20,7 @@ import { todoItems, setTodoSink, resetTodos } from "./todo.js";
 process.on("unhandledRejection", () => {});
 
 loadSecretsIntoEnv(); // hydrate API keys from ~/.adhd/secrets.json before building
-seedMcpDefaults(); // first run: wire up Chrome — must precede buildAgent's loadMcpTools
+migrateMcpDefaults(); // drop the old seeded Chrome server — must precede buildAgent's loadMcpTools
 const built = await buildAgent();
 setTodoSink((items) => broadcast("todos", { items })); // agent's plan → the strip under the composer
 seedExamples(); // first run: put a few worked examples on the Flows page
@@ -498,7 +498,7 @@ function mcpFragment(): string {
   const off = disabledTools();
   const rows = Object.entries(servers)
     .map(([name, s]) => {
-      // Its tools, collapsed — a server like Chrome brings 26, which is a wall
+      // Its tools, collapsed — a big server can bring dozens, which is a wall
       // of text until you actually want to switch one off.
       const tools = cat[name] ?? [];
       const live = tools.filter((t) => !off.has(t.full)).length;

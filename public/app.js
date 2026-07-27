@@ -844,8 +844,8 @@ function assistantNode() {
   add(wrapped);
   return n;
 }
-const TOOL_ICON = { web_search: "search", web_fetch: "download", search_files: "search", read_file: "file-text", write_file: "edit", list_dir: "file-text", grep: "search", glob: "hash", bash: "terminal", powershell: "terminal", run_script: "zap", remember: "bookmark", recall: "book-open", schedule: "clock", use_skill: "layers", spawn_agent: "users", loop_task: "repeat", render_ui: "layout", ask_user: "help-circle" };
-const TOOL_STATUS = { web_search: "searching the web", web_fetch: "reading a page", search_files: "searching your files", run_script: "running a script", bash: "running a command", powershell: "running a command", render_ui: "drawing", remember: "saving to memory", recall: "checking memory", spawn_agent: "delegating", loop_task: "iterating" };
+const TOOL_ICON = { web_search: "search", browser: "globe", search_files: "search", read_file: "file-text", write_file: "edit", list_dir: "file-text", grep: "search", glob: "hash", bash: "terminal", powershell: "terminal", run_script: "zap", remember: "bookmark", recall: "book-open", schedule: "clock", use_skill: "layers", spawn_agent: "users", loop_task: "repeat", render_ui: "layout", ask_user: "help-circle" };
+const TOOL_STATUS = { web_search: "searching the web", browser: "using the browser", search_files: "searching your files", run_script: "running a script", bash: "running a command", powershell: "running a command", render_ui: "drawing", remember: "saving to memory", recall: "checking memory", spawn_agent: "delegating", loop_task: "iterating" };
 // Individual tool calls append into a per-turn collapsible summary (lazily
 // created on the first tool-call), rather than directly into #log — expanded
 // live while the turn runs, auto-collapsed to a duration-stamped one-liner

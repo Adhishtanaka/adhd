@@ -23,6 +23,7 @@ export type Config = {
   localRoots?: string[]; // folders the local-file tools may read (default: home)
   allowedCommands?: string[]; // "always allow" keys, e.g. "bash:git" (see tools.allowKeyFor)
   mcpServers?: Record<string, McpServer>; // stdio MCP servers to load tools from (see mcp.ts)
+  browserArgs?: string[]; // override the headless-Chrome launch args (see browser.ts)
   capabilities?: Partial<Capabilities>; // switch whole feature groups off (see below)
   permissionMode?: PermissionMode;
   disabledTools?: string[]; // individual tools switched off by name, MCP ones included
@@ -36,7 +37,7 @@ export type Config = {
 export type Capabilities = {
   files: boolean; // read_file, write_file, list_dir, grep, glob, search_files
   shell: boolean; // bash, powershell, run_script
-  web: boolean; // web_search, web_fetch
+  web: boolean; // web_search, browser
   memory: boolean; // remember/recall + the memory list in the system prompt
   skills: boolean; // use_skill + the skill list in the system prompt
   schedule: boolean; // schedule

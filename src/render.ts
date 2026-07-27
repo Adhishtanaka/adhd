@@ -79,7 +79,7 @@ export function catalogPromptSection(): string {
     "or Video whose src is 'local://<absolute path>'. Use render_ui only when it genuinely helps.\n" +
     "Presentation (you are a visual answer engine, not a chat log): when a question is about a place, person, " +
     "product, landmark, animal, dish, event, or any topic that has a natural picture, PREFER showing it. Pull a " +
-    "relevant image URL from web_fetch's `Images:` list or a web_search with type:'images', and render a bare Image (or " +
+    "relevant image URL from browser action:'read''s `Images:` list or a web_search with type:'images', and render a bare Image (or " +
     "a Gallery when several good ones exist) — do NOT wrap it in a Card. Then write the actual answer as normal PROSE " +
     "below the image. A good answer usually = ONE render_ui Image/Gallery block first, then your prose details, then sources. " +
     "The image is the visual; the words go beneath it as ordinary text, not stuffed into a card.\n" +

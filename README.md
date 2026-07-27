@@ -9,7 +9,7 @@ It runs on Bun, talks to DeepSeek (or Anthropic, Gemini, or anything OpenAI-comp
 
 ✓ recall       user/location
 ✓ web_search   places · "restaurants Homagama, Sri Lanka"
-✓ web_fetch    https://…/the-one-it-picked
+✓ browser      read · https://…/the-one-it-picked
 Here are a few near you: …
 ```
 
@@ -22,7 +22,7 @@ bun install
 bun start          # serves + opens http://127.0.0.1:8787
 ```
 
-Add your DeepSeek key in **Settings** (or drop it in `.env` first — see [Configuration](#configuration)), and start chatting. You only need a key for the provider you actually use. On first launch adhd seeds a few example Flows and wires up [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) so it can drive a real browser out of the box.
+Add your DeepSeek key in **Settings** (or drop it in `.env` first — see [Configuration](#configuration)), and start chatting. You only need a key for the provider you actually use. On first launch adhd seeds a few example Flows. Web pages are read by driving a real headless Chrome ([Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) under the hood, behind the single `browser` tool) — it launches on first use, so a chat that never browses never pays for it.
 
 - **Standalone binary:** `bun run build` compiles `./adhd` (run it from a directory that has `public/` beside it).
 - **Tests:** `bun test`.
@@ -49,12 +49,13 @@ Tool schemas ship on **every** request, so they dominate long before the convers
 
 | | chars per request, before you type |
 |---|---|
-| system prompt | ~8,700 |
-| tool schemas — 50 tools, 29 of them Chrome MCP | ~27,000 |
-| **fixed overhead** | **~35,700** |
-| with MCP switched off (21 tools) | **~16,100** |
+| system prompt | ~9,000 |
+| tool schemas — 21 tools | ~7,900 |
+| **fixed overhead** | **~16,900** |
 
-That's what **Settings → Capabilities** is for: each group you switch off drops its tools and its slice of the prompt. Compaction can only shrink the conversation, never this — the strip shows the fixed part separately so you can see which one is the problem.
+It used to be ~35,700, because Chrome DevTools MCP was wired in as a plain MCP server and its 29 tool schemas alone cost ~27,000 chars on *every* request — more than the system prompt and every other tool put together. Chrome is now an internal engine behind the one `browser` tool, so you get the whole browser for ~1,000 chars instead of 27,000.
+
+**Settings → Capabilities** takes it further: each group you switch off drops its tools and its slice of the prompt. Compaction can only shrink the conversation, never this — the strip shows the fixed part separately so you can see which one is the problem.
 
 ### Permissions
 
@@ -81,7 +82,8 @@ flowchart TB
     web["web.ts · Bun.serve<br/>SSE stream · chat / settings / flows routes · scheduler tick"]
     setup["setup.ts · buildAgent()<br/>assembles config + models + tools + prompt"]
     agent["agent.ts · turn loop<br/>fallback chain · retries · history compaction"]
-    tools["tools.ts<br/>files · shell · web_search · web_fetch"]
+    tools["tools.ts<br/>files · shell · web_search"]
+    browser["browser.ts<br/>one browser tool · headless Chrome"]
     flows["flows.ts<br/>graph runner · run_flow"]
     render["render.ts<br/>render_ui + component catalog"]
     mcp["mcp.ts<br/>MCP servers · foreign tools, approval-gated"]
@@ -90,6 +92,7 @@ flowchart TB
   end
 
   srv[["MCP servers<br/>stdio child processes"]]
+  chrome[["headless Chrome<br/>your installed browser"]]
 
   ui -- "POST /chat" --> web
   flow -- "POST /flows · /flows/run · /flows/control" --> web
@@ -98,6 +101,8 @@ flowchart TB
   setup --> agent
   mcp -- "stdio · connects at startup, then calls tools" --> srv
   agent --> tools
+  agent --> browser
+  browser -- "stdio · connects on first use" --> chrome
   agent --> mcp
   agent --> extra
   agent --> render
@@ -196,8 +201,8 @@ A node with several outgoing edges **fans out** — every branch runs — and a 
 
 ```mermaid
 flowchart LR
-  s(["Start"]) --> a["Tool<br/>web_fetch · news"]
-  s --> b["Tool<br/>web_fetch · weather"]
+  s(["Start"]) --> a["Tool<br/>browser · news"]
+  s --> b["Tool<br/>browser · weather"]
   a --> m["Merge<br/>combine inputs"]
   b --> m
   m --> p["Prompt<br/>write daily report"]
@@ -227,7 +232,7 @@ Expanding a server in **Settings → MCP servers** lists the tools it actually o
 | `bash` / `powershell` | Run a shell command | yes |
 | `run_script` | Write and run a Bun/TypeScript snippet | yes |
 | `web_search` | Google via [Serper](https://serper.dev) — web, images, videos, places, shopping, news | — |
-| `web_fetch` | Read a URL as clean markdown; `query` returns only the relevant parts | — |
+| `browser` | Drive headless Chrome: `read` a URL as clean markdown (`query` returns only the relevant parts), `snapshot` a page's elements, `screenshot`, `fill` / `click` / `type` / `press`, `eval` | on changes |
 | `search_files` | Find your own local images/videos/docs to show | — |
 | `remember` / `recall` | Save or load durable memory | — |
 | `schedule` | Add, list, or remove scheduled tasks | — |
@@ -274,7 +279,8 @@ Merged from `~/.adhd/config.json`, then `./.adhd/config.json` (project wins). Al
   "allowedCommands": ["bash:git"],// "always allow" keys added via the approval prompt
   "permissionMode": "normal",    // "ask" | "normal" | "auto" (Settings → Permissions)
   "capabilities": { "shell": false }, // switch feature groups off; unlisted = on
-  "disabledTools": ["chrome_click"],  // individual tools, MCP ones included
+  "disabledTools": ["run_script"],    // individual tools, MCP ones included
+  // "browserArgs": [...],       // override the headless-Chrome launch args
   "mcpServers": {                // stdio MCP servers; their tools load at startup
     "notes": { "command": "npx", "args": ["-y", "@some/notes-mcp"], "trust": "ask" }
   }

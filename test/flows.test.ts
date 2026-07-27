@@ -247,8 +247,8 @@ test("fan-out runs every branch; a merge waits for all, then joins labeled secti
     name: "merge",
     nodes: [
       node("s", "start"),
-      node("a", "tool", { tool: "web_fetch" }),
-      node("b", "tool", { tool: "web_fetch" }),
+      node("a", "tool", { tool: "browser" }),
+      node("b", "tool", { tool: "browser" }),
       node("m", "merge"),
       node("p", "prompt", { prompt: "report" }),
     ],
@@ -256,9 +256,9 @@ test("fan-out runs every branch; a merge waits for all, then joins labeled secti
   };
   const ex = stub();
   const out = await runFlow(flow, ex);
-  expect(ex.seen.filter((x) => x.startsWith("tool:web_fetch")).length).toBe(2); // both ran
-  expect(out).toContain("## 1 · web_fetch"); // merged into two labeled sections…
-  expect(out).toContain("## 2 · web_fetch");
+  expect(ex.seen.filter((x) => x.startsWith("tool:browser")).length).toBe(2); // both ran
+  expect(out).toContain("## 1 · browser"); // merged into two labeled sections…
+  expect(out).toContain("## 2 · browser");
   expect(out).toContain(">report"); // …and the prompt saw that merged input
 });
 

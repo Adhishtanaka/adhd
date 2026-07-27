@@ -26,29 +26,25 @@ export type McpServer = {
   trust?: "ask" | "read";
 };
 
-// --- the one server adhd ships with ----------------------------------------
-// Chrome DevTools MCP, so adhd can drive a real browser out of the box instead
-// of only fetching HTML. Seeded ONCE, ever — same deal as the example flows: if
-// you delete it, it stays deleted rather than coming back every launch.
-//
-// trust "read" means no approval card per call. That's the usable setting for a
-// server with ~26 tools, and the deliberate trade: a page adhd just fetched can
-// steer the browser without asking, since MCP output doesn't pass through
-// sanitize.ts. Flip it to "ask" in Settings → MCP if that matters to you.
-const CHROME: McpServer = {
-  command: "npx",
-  args: ["-y", "chrome-devtools-mcp@latest"],
-  trust: "read",
-};
-const SEEDED_MARK = join(HOME_ROOT, ".mcp-seeded");
+// --- migration: Chrome is no longer an MCP server ---------------------------
+// adhd used to seed chrome-devtools-mcp here, which put 29 tool schemas (~27k
+// chars) into every single request — more context than the system prompt and
+// every other tool combined. Chrome now lives in browser.ts as an internal
+// engine behind the one `browser` tool, so the seeded server is removed. Run
+// ONCE, ever: someone who adds it back by hand keeps it.
+const MIGRATED_MARK = join(HOME_ROOT, ".mcp-seeded-v2");
 
-/** Seed the Chrome server once, ever. Call before loadMcpTools(). */
-export function seedMcpDefaults(): void {
-  if (existsSync(SEEDED_MARK)) return;
+/** Drop the old seeded Chrome server. Call before loadMcpTools(). */
+export function migrateMcpDefaults(): void {
+  if (existsSync(MIGRATED_MARK)) return;
   mkdirSync(HOME_ROOT, { recursive: true });
   const servers = loadConfig().mcpServers ?? {};
-  if (!servers.chrome) setMcpServers({ ...servers, chrome: CHROME });
-  writeFileSync(SEEDED_MARK, new Date().toISOString());
+  // Only the entry we seeded — a hand-customised chrome server is left alone.
+  if (servers.chrome?.args?.some((a) => a.includes("chrome-devtools-mcp"))) {
+    const { chrome: _gone, ...rest } = servers;
+    setMcpServers(rest);
+  }
+  writeFileSync(MIGRATED_MARK, new Date().toISOString());
 }
 
 // Tool names must survive the provider's [A-Za-z0-9_-] check and stay unique
