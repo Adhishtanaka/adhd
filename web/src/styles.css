@@ -178,6 +178,58 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
 #chat-area.home > #log { flex: 0 0 auto; overflow: visible; padding-top: 0; padding-bottom: 0; }
 #home-hero { text-align: center; padding: 0 1.25rem 1.5rem; }
 #chat-area:not(.home) > footer { border-top: 1px solid rgb(var(--c-border)); }
+
+/* ---- Flow studio: a quiet, tool-like canvas with strong information hierarchy. ---- */
+.flow-page-head { background: rgb(var(--c-bg) / .92); backdrop-filter: blur(18px); }
+.flow-back { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid rgb(var(--c-border)); border-radius: 10px; color: rgb(var(--c-text-dim)); transition: .15s ease; }
+.flow-back:hover { color: rgb(var(--c-text)); background: rgb(var(--c-surface)); transform: translateX(-2px); }
+.flow-workspace { background: rgb(var(--c-surface-2)); }
+.flow-library, .flow-inspector { background: rgb(var(--c-bg)); }
+.flow-new { display: flex; align-items: center; justify-content: center; gap: .5rem; min-height: 38px; padding: .5rem .75rem; border-radius: 12px; background: rgb(var(--c-text)); color: rgb(var(--c-bg)); font-size: 12px; font-weight: 600; transition: transform .15s, opacity .15s; }
+.flow-new:hover, .flow-run:hover { opacity: .9; transform: translateY(-1px); }
+.flow-new span { font-size: 18px; font-weight: 400; line-height: 0; }
+.flow-list-item { position: relative; transition: background .15s, color .15s, transform .15s; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-list-item:hover { background: rgb(var(--c-surface) / .6); transform: translateX(2px); }
+.flow-list-item.active::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 2px; border-radius: 2px; background: rgb(var(--c-accent)); }
+.flow-toolbar { background: rgb(var(--c-bg) / .96); overflow-x: auto; scrollbar-width: none; }
+.flow-toolbar::-webkit-scrollbar { display: none; }
+.flow-title-input { width: 210px; flex: 0 0 auto; background: transparent; border: 1px solid transparent; border-radius: 10px; padding: .45rem .65rem; color: rgb(var(--c-text)); font-family: var(--font-display); font-size: 14px; font-weight: 600; outline: none; }
+.flow-title-input:hover { background: rgb(var(--c-surface)); }
+.flow-title-input:focus { border-color: rgb(var(--c-accent)); background: rgb(var(--c-bg)); }
+.flow-add-group { padding-left: .5rem; border-left: 1px solid rgb(var(--c-border)); white-space: nowrap; }
+.flow-run { flex: 0 0 auto; padding: .48rem .9rem; border-radius: 10px; background: rgb(var(--c-text)); color: rgb(var(--c-bg)); font-size: 12px; font-weight: 600; transition: transform .15s, opacity .15s; }
+.flow-canvas { position: relative; background: radial-gradient(circle at 50% 10%, rgb(var(--c-accent) / .055), transparent 35%), rgb(var(--c-surface-2)); }
+.flow-node { box-shadow: 0 1px 2px rgb(0 0 0 / .08), 0 8px 24px rgb(0 0 0 / .08); transition: border-color .18s, box-shadow .18s, transform .18s; }
+.flow-node:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgb(0 0 0 / .1), 0 14px 30px rgb(0 0 0 / .12); }
+.flow-kind { display: inline-flex; align-items: center; gap: 5px; text-transform: uppercase; letter-spacing: .08em; }
+.flow-kind::before { content: ""; width: 6px; height: 6px; border-radius: 2px; background: rgb(var(--c-accent)); }
+.flow-kind-if::before, .flow-kind-switch::before { background: rgb(var(--c-info)); transform: rotate(45deg); }
+.flow-kind-tool::before { background: rgb(var(--c-positive)); border-radius: 50%; }
+.flow-kind-merge::before { background: rgb(var(--c-accent-2)); }
+.flow-inspector-head { z-index: 2; background: rgb(var(--c-bg) / .94); backdrop-filter: blur(14px); }
+.flow-inspector-body textarea { line-height: 1.5; }
+.flow-runlog { background: rgb(var(--c-bg)); box-shadow: 0 -8px 24px rgb(0 0 0 / .04); }
+.react-flow__edge-path { stroke: rgb(var(--c-text-dim) / .7); stroke-width: 1.6; }
+.react-flow__edge.selected .react-flow__edge-path { stroke: rgb(var(--c-accent)); stroke-width: 2.2; }
+.react-flow__controls, .react-flow__minimap { overflow: hidden; border: 1px solid rgb(var(--c-border)); border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / .1); background: rgb(var(--c-bg) / .92); }
+.react-flow__controls-button { background: rgb(var(--c-bg)); border-color: rgb(var(--c-border)); fill: rgb(var(--c-text)); }
+.react-flow__minimap { opacity: .78; }
+.react-flow__attribution { opacity: .45; }
+@media (max-width: 900px) {
+  .flow-library { width: 150px; }
+  .flow-inspector { width: 260px; }
+  .flow-title-input { width: 170px; }
+  .flow-add-group .eyebrow { display: none; }
+}
+@media (max-width: 700px) {
+  .flow-workspace { position: relative; }
+  .flow-library { display: none; }
+  .flow-inspector { display: none; position: absolute; z-index: 8; right: 0; top: 0; bottom: 0; width: min(82vw, 320px); box-shadow: -12px 0 30px rgb(0 0 0 / .18); }
+  .flow-inspector.active { display: block; }
+  .flow-toolbar { padding-right: .75rem; }
+  .flow-title-input { width: 145px; }
+  .react-flow__minimap { display: none; }
+}
 @media (max-width: 640px) {
   #log, #nokey, #composer, #status { padding-left: 0.75rem; padding-right: 0.75rem; }
 }
