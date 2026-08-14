@@ -8,11 +8,14 @@ import {
   coerce,
   toolArgSpecs,
   RunControl,
+  flowRunner,
   type Flow,
   type FlowExec,
   type FlowEvent,
 } from "../src/flows.js";
-import { builtinTools } from "../src/tools.js";
+import { builtinTools, confirmAction, setBashConfirm } from "../src/tools.js";
+import { tool } from "ai";
+import { z } from "zod";
 
 // Executors are stubbed — traversal is what's under test, no model involved.
 function stub(over: Partial<FlowExec> = {}): FlowExec & { seen: string[] } {
@@ -472,4 +475,32 @@ test("normalize leaves a hand-placed position alone and drops broken edges", asy
   expect(out.nodes[0].position).toEqual({ x: 12, y: 34 }); // untouched
   expect(typeof out.nodes[1].position?.x).toBe("number"); // filled in
   expect(out.edges).toHaveLength(1); // the two half-connected edges are gone
+});
+
+// The reported bug: a flow with a shell/script step stopped mid-run behind a
+// permission card — including scheduled runs, where nobody is there to click it.
+// Drawing the flow and hitting Run IS the approval.
+test("a tool node runs without raising a permission card", async () => {
+  let asked = 0;
+  setBashConfirm(async () => {
+    asked++;
+    return false;
+  });
+  const flow: Flow = {
+    id: "f",
+    name: "f",
+    nodes: [
+      { id: "a", type: "start", position: { x: 0, y: 0 }, data: {} },
+      { id: "b", type: "tool", position: { x: 0, y: 1 }, data: { tool: "needs_ok", args: {} } },
+    ],
+    edges: [{ source: "a", target: "b" }],
+  };
+  const needs_ok = tool({
+    description: "asks before doing anything",
+    inputSchema: z.object({}),
+    execute: async () => ((await confirmAction("dangerous")) ? "ran" : "denied"),
+  });
+  const out = await flowRunner({ models: [], tools: { needs_ok } })(flow);
+  expect(out).toBe("ran");
+  expect(asked).toBe(0);
 });

@@ -2,10 +2,10 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// ytId lives in the browser bundle (public/app.js is a <script>, not a module),
+// ytId lives in the browser bundle (app.js is a browser module with imports at the top),
 // so lift it out by marker and eval it rather than duplicating it — same trick
 // as specsig.test.ts.
-const src = readFileSync(join(import.meta.dir, "..", "public", "app.js"), "utf8");
+const src = readFileSync(join(import.meta.dir, "..", "web", "src", "app.js"), "utf8");
 const body = src.slice(src.indexOf("// YT_ID_START"), src.indexOf("// YT_ID_END"));
 const ytId = new Function(body + "\nreturn ytId;")() as (s: unknown, p?: string) => string | null;
 

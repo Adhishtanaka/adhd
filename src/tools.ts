@@ -333,8 +333,12 @@ export function builtinTools(): Record<string, Tool> {
       }),
       execute: async ({ code, explain }) => {
         // allowKey null: a script is arbitrary code, so there is no program name
-        // worth blanket-approving — run_script always asks. ponytail: no exceptions.
-        if (!(await confirmBash({ command: `bun run <script>\n${code}`, explain, allowKey: null })))
+        // worth blanket-approving — run_script always asks. The one exception is a
+        // flow step, whose script the user wrote and whose run they just started.
+        if (
+          !preApproved() &&
+          !(await confirmBash({ command: `bun run <script>\n${code}`, explain, allowKey: null }))
+        )
           return "user denied script";
         const file = join(tmpdir(), `adhd-${Date.now()}.ts`);
         writeFileSync(file, code);

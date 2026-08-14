@@ -24,7 +24,8 @@ bun start          # serves + opens http://127.0.0.1:8787
 
 Add your DeepSeek key in **Settings** (or drop it in `.env` first — see [Configuration](#configuration)), and start chatting. You only need a key for the provider you actually use. On first launch adhd seeds a few example Flows. Web pages are read by driving a real headless Chrome ([Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) under the hood, behind the single `browser` tool) — it launches on first use, so a chat that never browses never pays for it.
 
-- **Standalone binary:** `bun run build` compiles `./adhd` (run it from a directory that has `public/` beside it).
+- **Frontend:** sources live in [`web/`](web/) and are bundled by [Vite](https://vite.dev) into `public/`, which is what the server serves. `bun start` builds it first; `bun run dev:web` rebuilds on save.
+- **Standalone binary:** `bun run build` compiles `./adhd` (run it from a directory that has the built `public/` beside it).
 - **Tests:** `bun test`.
 
 ## What it can do
@@ -65,7 +66,7 @@ It used to be ~35,700, because Chrome DevTools MCP was wired in as a plain MCP s
 - **Normal** (default) — asks before anything that changes your machine, minus what you've already allowed.
 - **Approve everything** — never asks. For a sandbox you don't mind losing.
 
-Anything that changes your machine (`bash`, `powershell`, `run_script`) asks for a yes/no in the UI first — including inside subagents, Flows, and scheduled runs. Approving with "always allow" remembers that *program* (`bash:git`), never a whole command line, and is offered only for a single plain command — anything that could smuggle a second one (`ls && rm -rf ~`) is one-time approval only. A prompt nobody answers within 5 minutes declines itself, so a scheduled run that fires while you're away fails safely instead of hanging.
+Anything that changes your machine (`bash`, `powershell`, `run_script`) asks for a yes/no in the UI first — including inside subagents. **Flow steps are the exception:** you wrote the graph and you pressed Run, so its tool nodes run straight through, and a scheduled Flow doesn't stall on a card nobody is there to click. Approving with "always allow" remembers that *program* (`bash:git`), never a whole command line, and is offered only for a single plain command — anything that could smuggle a second one (`ls && rm -rf ~`) is one-time approval only. A prompt nobody answers within 5 minutes declines itself, so a scheduled run that fires while you're away fails safely instead of hanging.
 
 ## Architecture
 
@@ -73,7 +74,7 @@ One Bun process serves the UI, streams each turn over SSE, and runs the agent in
 
 ```mermaid
 flowchart TB
-  subgraph client["Browser — public/"]
+  subgraph client["Browser — web/ → public/ (Vite)"]
     ui["index.html + app.js<br/>SSE transcript · composer · spec renderer"]
     flow["flow.js<br/>React Flow canvas (Flows)"]
   end
@@ -166,7 +167,7 @@ Long tool calls don't hold the turn open: a tool that blows its deadline hands b
 
 A **Flow** is a saved workflow you draw on a canvas — [n8n](https://n8n.io)-style, but each node is a plain function, not an agent. Open it from the **Flows** button in the header.
 
-The canvas is [React Flow](https://reactflow.dev), loaded from a pinned CDN via an import map — no build step, in keeping with the rest of the frontend. The graph runs **server-side** in [`flows.ts`](src/flows.ts) and is stored as JSON in `~/.adhd/flows.json`.
+The canvas is [React Flow](https://reactflow.dev), bundled from npm along with the rest of the frontend. The graph runs **server-side** in [`flows.ts`](src/flows.ts) and is stored as JSON in `~/.adhd/flows.json`.
 
 Data flows along the edges: each node takes the previous node's output as its input and passes its own output on. `{{prev}}` anywhere in a field is replaced by that input. Without a placeholder, the input is appended (for prompt/if/switch text) or left untouched (for tool arguments).
 
@@ -277,7 +278,7 @@ Merged from `~/.adhd/config.json`, then `./.adhd/config.json` (project wins). Al
   "systemPrompt": "...",         // replaces BASE_SYSTEM
   "localRoots": ["/path/..."],   // folders the local-file tools may read (default: home)
   "allowedCommands": ["bash:git"],// "always allow" keys added via the approval prompt
-  "permissionMode": "normal",    // "ask" | "normal" | "auto" (Settings → Permissions)
+  "permissionMode": "normal",    // "ask" | "normal" | "auto" (Settings → Permissions; Flow steps never ask)
   "capabilities": { "shell": false }, // switch feature groups off; unlisted = on
   "disabledTools": ["run_script"],    // individual tools, MCP ones included
   // "browserArgs": [...],       // override the headless-Chrome launch args

@@ -635,7 +635,7 @@ Bun.serve({
     if (p === "/") return new Response(Bun.file(join(PUBLIC, "index.html")));
     // Vite build output: /assets/<name>-<hash>.js|css. The regex is the traversal
     // guard — no slashes, no dots-dots, so join() can't escape PUBLIC.
-    if (/^\/assets\/[\w.-]+\.(js|css|map|svg|woff2?)$/.test(p))
+    if (/^\/assets\/[\w.-]+\.(js|css|map|svg|png|jpe?g|gif|webp|woff2?)$/.test(p))
       return new Response(Bun.file(join(PUBLIC, p)));
 
     // serve a local file — restricted to allowed roots + same-site requests only

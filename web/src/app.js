@@ -8,6 +8,14 @@ import * as ReactDOM from "react-dom/client";
 import L from "leaflet";
 import htmx from "htmx.org";
 import mermaid from "mermaid";
+import markerIcon from "leaflet/dist/images/marker-icon.png";
+import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
+import markerShadow from "leaflet/dist/images/marker-shadow.png";
+
+// Leaflet normally sniffs its marker images out of the stylesheet's url(); the
+// bundler rewrites those to hashed/inlined URLs, which defeats the sniff. Hand
+// it the resolved URLs instead, or every L.marker() renders as a broken image.
+L.Icon.Default.mergeOptions({ iconUrl: markerIcon, iconRetinaUrl: markerIcon2x, shadowUrl: markerShadow });
 
 // mermaid stays on window: applyTheme() feature-detects it (it used to be a CDN
 // script that might not have loaded yet) and re-initialises on every theme flip.

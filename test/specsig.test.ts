@@ -2,9 +2,9 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// specSig lives in the browser bundle (public/app.js is loaded via <script>, not
+// specSig lives in the browser bundle (app.js is a browser module with imports at the top, not
 // a module), so lift it out by marker and eval it rather than duplicating it.
-const src = readFileSync(join(import.meta.dir, "..", "public", "app.js"), "utf8");
+const src = readFileSync(join(import.meta.dir, "..", "web", "src", "app.js"), "utf8");
 const body = src.slice(src.indexOf("// SPEC_SIG_START"), src.indexOf("// SPEC_SIG_END"));
 const specSig = new Function(body + "\nreturn specSig;")() as (s: any) => string;
 
