@@ -195,7 +195,11 @@ const DESCRIPTION =
   "'click' (`uid`); 'type' (`text` into the focused element); 'press' (`key`, e.g. 'Enter'); " +
   "'eval' (`script`: a JS arrow function, last resort). " +
   "The page stays open between calls, so read → snapshot → fill → press → read all work on the same session. " +
-  "To find a URL in the first place, use web_search.";
+  "To find a URL in the first place, use web_search. " +
+  // ponytail: no autonomous `goal` action — spawn_agent already IS the loop.
+  "For a multi-step goal on a site (log in, search, navigate, extract), hand the whole goal to " +
+  "spawn_agent instead of driving it click-by-click yourself — it has this same tool and keeps the " +
+  "snapshots out of your context.";
 
 function browserTool(): Tool {
   return tool({
