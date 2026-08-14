@@ -10,9 +10,10 @@ import { z } from "zod";
 // loop's checklist gates when the loop ENDS, this one is purely for showing the
 // work, and merging them would tie a UI concern to a control-flow one.
 //
-// ponytail: one list, in RAM, for the whole app — adhd runs one turn at a time
-// (web.ts gates on `busy`), so there's nothing to key it by. Per-conversation
-// storage is the upgrade if adhd ever grows tabs.
+// One list at a time, in RAM. adhd runs exactly one turn at a time (web.ts gates
+// everything on `busy`), so this module only ever describes the turn in flight;
+// web.ts swaps the owning session's list in at the start of a turn and takes it
+// back at the end, which is what keeps two browsers from sharing a checklist.
 export type TodoItem = { title: string; status: "pending" | "doing" | "done" };
 
 let items: TodoItem[] = [];
@@ -26,6 +27,15 @@ export function setTodoSink(fn: (items: TodoItem[]) => void): void {
 export function resetTodos(): void {
   items = [];
   notify(items);
+}
+/**
+ * Make `next` the live list, without notifying. Used to swap the owning
+ * session's checklist in as its turn begins: the sink is fire-and-forget to
+ * whoever is listening, and announcing the swap would replay one session's plan
+ * into another's transcript.
+ */
+export function loadTodos(next: TodoItem[]): void {
+  items = next;
 }
 
 export function todoTools(): Record<string, Tool> {

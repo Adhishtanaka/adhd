@@ -81,7 +81,8 @@ function envSection(): string {
 }
 
 export type Built = {
-  agent: Agent;
+  newAgent: () => Agent; // a fresh conversation (one per browser session)
+  dropAgent: (a: Agent) => void; // stop tracking an evicted session's agent
   config: Config;
   toolNames: string[];
   skillNames: string[];
@@ -95,23 +96,6 @@ export type Built = {
   allToolNames: string[]; // every tool that exists, on or off — for the Settings list
 };
 
-// Size the history budget from the model's real context window, then ask the
-// provider for the true number and re-size if it differs. Synchronous first so
-// startup never waits on a network call; the probe is fire-and-forget and a
-// failure silently keeps the table value.
-function applyContext(agent: Agent, config: Config): void {
-  const spec = config.model;
-  const set = (tokens: number) =>
-    agent.setContext(
-      config.historyBudget ?? autoBudget(tokens), // an explicit budget always wins
-      tokens * CHARS_PER_TOKEN,
-      spec,
-    );
-  set(tableContext(spec));
-  void probeContext(spec, config).then((tokens) => {
-    if (config.model === spec) set(tokens); // ignore a probe that lost a race with /model
-  });
-}
 
 // Assemble the agent + tools + system prompt from config/skills/memory. Shared
 // by every frontend. The `models` array is a single shared reference — mutating
@@ -228,16 +212,46 @@ export async function buildAgent(): Promise<Built> {
   };
   const tools = allowed(allAgentTools, caps, off, mcpNames);
 
-  const agent = createAgent({ models, tools, system, historyBudget: config.historyBudget });
+  // One agent per browser session, all sharing this build's tools, system prompt
+  // and model list. Held here rather than in web.ts so a model switch or a
+  // capability toggle reaches every live conversation, not just the one that
+  // happened to make the change.
+  const agents = new Set<Agent>();
+  let liveTools = tools; // the current filtered set, for agents created later
+  let windowTokens = tableContext(config.model); // last known real context window
+
+  // Size the history budget from the model's real context window, then ask the
+  // provider for the true number and re-size if it differs. Synchronous first so
+  // startup never waits on a network call; the probe is fire-and-forget and a
+  // failure silently keeps the table value. The probe is per MODEL, not per
+  // agent — every session shares one model, so firing it per session would be N
+  // identical network calls for one answer.
+  const size = (a: Agent) =>
+    a.setContext(
+      config.historyBudget ?? autoBudget(windowTokens), // an explicit budget always wins
+      windowTokens * CHARS_PER_TOKEN,
+      config.model,
+    );
+  const applyContext = () => {
+    const spec = config.model;
+    const set = (tokens: number) => {
+      windowTokens = tokens;
+      for (const a of agents) size(a);
+    };
+    set(tableContext(spec));
+    void probeContext(spec, config).then((tokens) => {
+      if (config.model === spec) set(tokens); // ignore a probe that lost a race with /model
+    });
+  };
 
   const swap = (ids: string[]) => {
     models.length = 0;
     models.push(...resolveModels({ ...config, model: ids[0], fallbackModel: ids.slice(1) }));
-    agent.setModels(models); // resets modelIdx; same shared reference
-    applyContext(agent, config); // a 200k model and a 1M model get different budgets
+    for (const a of agents) a.setModels(models); // resets modelIdx; same shared reference
+    applyContext(); // a 200k model and a 1M model get different budgets
   };
 
-  applyContext(agent, config);
+  applyContext();
 
   // Re-filter against config as it is NOW, so a Settings toggle lands on the
   // next turn rather than the next launch. `toolNames` is rebuilt too, since
@@ -246,13 +260,20 @@ export async function buildAgent(): Promise<Built> {
   const applyCaps = (): string[] => {
     const fresh = loadConfig();
     const next = allowed(allAgentTools, capabilities(fresh), disabledTools(fresh), mcpNames);
-    agent.setTools(next);
+    liveTools = next;
+    for (const a of agents) a.setTools(next);
     liveNames = Object.keys(next);
     return liveNames;
   };
 
   return {
-    agent,
+    newAgent: () => {
+      const a = createAgent({ models, tools: liveTools, system, historyBudget: config.historyBudget });
+      agents.add(a);
+      size(a); // born with the same budget as every other session, no extra probe
+      return a;
+    },
+    dropAgent: (a) => agents.delete(a),
     config,
     get toolNames() {
       return liveNames;

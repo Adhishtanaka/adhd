@@ -13,7 +13,8 @@ import { loadMemories, saveMemory, deleteMemory } from "./memory.js";
 import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./scheduler.js";
 import { loadFlows, saveFlows, seedExamples, toolArgSpecs, RunControl, type Flow } from "./flows.js";
 import { migrateMcpDefaults, mcpCatalog } from "./mcp.js";
-import { todoItems, setTodoSink, resetTodos } from "./todo.js";
+import { todoItems, setTodoSink, resetTodos, loadTodos, type TodoItem } from "./todo.js";
+import type { Agent } from "./agent.js";
 
 // The AI SDK leaves some internal promises unawaited on error; swallow the stray
 // rejections so they don't crash the server (real errors reach the client).
@@ -33,11 +34,45 @@ const PUBLIC = existsSync(join(import.meta.dir, "..", "public", "index.html"))
 const PORT = Number(process.env.ADHD_PORT ?? 8787);
 const enc = new TextEncoder();
 
+// --- sessions ---------------------------------------------------------------
+// One conversation per browser, keyed by an httpOnly cookie. Before this there
+// was a single agent and a single client set, so two windows shared one history
+// and each saw the other's transcript stream past. Only the CONVERSATION is
+// per-session: keys, config, memory, skills, flows and the schedule are the
+// user's machine, not the chat, and stay shared.
+//
+// ponytail: in RAM, no persistence — history already died with the process, so
+// this only stops tabs colliding. It is NOT an access control: same browser
+// means same cookie, so it does not stop someone at your keyboard reading the
+// chat. A passcode is the upgrade for that.
+type Session = {
+  id: string;
+  agent: Agent;
+  clients: Set<ReadableStreamDefaultController>;
+  todos: TodoItem[];
+  seen: number;
+};
+const sessions = new Map<string, Session>();
+const SID_COOKIE = "adhd_sid";
+// A browser that never comes back should not pin its history forever.
+const SESSION_TTL = 60 * 60_000;
+
+// Background work — a scheduled task, a finished job — has no browser behind it.
+// It runs against this one when no real session exists, so runTurn always has an
+// agent to talk to and its output simply goes nowhere (no clients), which is
+// already what happened when nothing was connected.
+let systemSession: Session;
+
+// Whose turn is running right now. adhd runs exactly ONE turn at a time — `busy`
+// gates chat, flows, job drains and the scheduler alike — so a single pointer is
+// enough to route every global tool sink (confirm, ask, subagent, render_ui,
+// todos) back to the session that asked for the work, with no session id
+// threaded through any tool signature.
+let active: Session | null = null;
+
 // --- SSE broadcast ----------------------------------------------------------
-const clients = new Set<ReadableStreamDefaultController>();
-function broadcast(event: string, data: unknown) {
-  const chunk = enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  for (const c of clients) {
+function send(target: Session, chunk: Uint8Array) {
+  for (const c of target.clients) {
     try {
       c.enqueue(chunk);
     } catch {
@@ -45,6 +80,55 @@ function broadcast(event: string, data: unknown) {
     }
   }
 }
+/** To one session — by default whichever one's turn is currently running. */
+function broadcast(event: string, data: unknown, target: Session | null = active) {
+  if (!target) return;
+  send(target, enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+}
+/**
+ * To every attached browser. Only for facts that are genuinely machine-wide:
+ * `busy` (one turn at a time, so everyone is blocked), a model switch, and Flows
+ * page progress (one shared canvas). Anything conversational must not use this.
+ */
+function broadcastAll(event: string, data: unknown) {
+  const chunk = enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  for (const s of sessions.values()) send(s, chunk);
+}
+
+function makeSession(id: string): Session {
+  return { id, agent: built.newAgent(), clients: new Set(), todos: [], seen: Date.now() };
+}
+systemSession = makeSession("system"); // kept out of `sessions`, so no cookie can name it
+/** The session named by the request's cookie, created on first sight. */
+function sessionFor(req: Request): Session {
+  const id = req.headers.get("cookie")?.match(/(?:^|;\s*)adhd_sid=([^;]+)/)?.[1];
+  const found = id ? sessions.get(id) : undefined;
+  if (found) {
+    found.seen = Date.now();
+    return found;
+  }
+  const s = makeSession(id && /^[\w-]{8,64}$/.test(id) ? id : crypto.randomUUID());
+  sessions.set(s.id, s);
+  return s;
+}
+/**
+ * Where unattended output should land: the most recently used real session, so a
+ * scheduled task appears in the transcript someone is actually looking at rather
+ * than in all of them at once.
+ */
+function ownerSession(): Session {
+  let best: Session | null = null;
+  for (const s of sessions.values()) if (!best || s.seen > best.seen) best = s;
+  return best ?? systemSession;
+}
+setInterval(() => {
+  const cutoff = Date.now() - SESSION_TTL;
+  for (const [id, s] of sessions) {
+    if (s.clients.size || s.seen > cutoff) continue;
+    built.dropAgent(s.agent);
+    sessions.delete(id);
+  }
+}, 10 * 60_000);
 
 // --- interactive bridge: confirm / ask / subagent → SSE, answered via POST ---
 const pending = new Map<string, (v: unknown) => void>();
@@ -143,13 +227,19 @@ function summarize(args: unknown): string {
 }
 
 // --- run a turn (one at a time) --------------------------------------------
+// Still one at a time across the whole machine: sessions separate the histories,
+// not the execution. `busy` therefore stays global and is announced to everyone,
+// because a second browser really is blocked while this runs — its composer
+// queues the message rather than pretending it can start.
 let busy = false;
-async function runTurn(message: string) {
+async function runTurn(message: string, s: Session) {
   busy = true;
-  broadcast("busy", { busy: true });
+  active = s; // routes every tool sink at this session for the whole turn
+  loadTodos(s.todos); // its checklist, not whoever ran last
+  broadcastAll("busy", { busy: true });
   let assistant = "";
   try {
-    await built.agent.send(message, (e) => {
+    await s.agent.send(message, (e) => {
       switch (e.type) {
         case "text":
           assistant += e.delta;
@@ -186,8 +276,10 @@ async function runTurn(message: string) {
     broadcast("error", { message: (err as Error)?.message ?? String(err) });
     broadcast("done", { html: "" });
   } finally {
+    s.todos = todoItems(); // hand the checklist back before another session's turn
+    active = null;
     busy = false;
-    broadcast("busy", { busy: false });
+    broadcastAll("busy", { busy: false });
     // A job may have landed while this turn was running — pick it up now that the
     // agent is free. Debounced (not a direct call) so any siblings still landing
     // coalesce into the same next turn, and it runs on a clean stack.
@@ -212,18 +304,23 @@ function scheduleDrain() {
     drainJobs();
   }, DRAIN_DEBOUNCE_MS);
 }
+// A job finishes long after the turn that started it, so `active` is null by
+// then. Send the notice to the session most recently in use — the one whose
+// transcript the answer is going to be folded into by drainJobs below.
 setJobSinks(
   (j) => {
     finishedJobs.push(j);
-    broadcast("info", { message: `[${j.id}] ${j.label} — finished after ${j.seconds}s` });
+    broadcast("info", { message: `[${j.id}] ${j.label} — finished after ${j.seconds}s` }, ownerSession());
     scheduleDrain();
   },
-  (id, label) => broadcast("info", { message: `[${id}] ${label} — still running, continuing in the background` }),
+  (id, label) =>
+    broadcast("info", { message: `[${id}] ${label} — still running, continuing in the background` }, ownerSession()),
 );
 function drainJobs() {
   if (busy || !finishedJobs.length || !built.hasKey()) return;
+  const owner = ownerSession();
   const jobs = finishedJobs.splice(0); // take every finished job — one turn, not one each
-  broadcast("notify", { title: "Background task finished", body: jobs.map((j) => j.label).join(", ") });
+  broadcast("notify", { title: "Background task finished", body: jobs.map((j) => j.label).join(", ") }, owner);
   const results = jobs
     .map((j) => `[job ${j.id} "${j.label}" — finished in ${j.seconds}s]\n${j.result}`)
     .join("\n\n---\n\n");
@@ -235,6 +332,7 @@ function drainJobs() {
     `${lead} These are the results of tool calls you backgrounded — do not re-run that work.\n\n${results}\n\n` +
       `Fold them into the answer the user was waiting for, in ONE short reply. If the results add nothing ` +
       `beyond what you already told the user, end your turn with no message rather than repeating yourself.`,
+    owner,
   );
 }
 
@@ -246,17 +344,21 @@ async function runFlowById(id: string): Promise<void> {
   const flow = loadFlows().find((f) => f.id === id);
   if (!flow) return;
   busy = true;
+  // The Flows page is one shared canvas, so its progress goes to everyone — but
+  // a flow still runs tools, and those sinks need a transcript to land in.
+  active = ownerSession();
   currentRun = new RunControl();
-  broadcast("busy", { busy: true });
-  broadcast("flow", { type: "run-start", name: flow.name });
+  broadcastAll("busy", { busy: true });
+  broadcastAll("flow", { type: "run-start", name: flow.name });
   try {
-    await built.runFlow(flow, (e) => broadcast("flow", e), currentRun);
+    await built.runFlow(flow, (e) => broadcastAll("flow", e), currentRun);
   } catch (err) {
-    broadcast("flow", { type: "node-error", id: "", ms: 0, message: (err as Error)?.message ?? String(err) });
+    broadcastAll("flow", { type: "node-error", id: "", ms: 0, message: (err as Error)?.message ?? String(err) });
   } finally {
     currentRun = null;
+    active = null;
     busy = false;
-    broadcast("busy", { busy: false });
+    broadcastAll("busy", { busy: false });
     scheduleDrain();
   }
 }
@@ -269,12 +371,15 @@ setInterval(() => {
   for (const t of loadSchedule()) {
     if (isDue(t, now, lastRun[t.id])) {
       lastRun[t.id] = now.getTime();
-      broadcast("info", { message: `[scheduled] ${t.id}` });
-      broadcast("notify", { title: `Scheduled: ${t.id}`, body: t.prompt });
+      // Nobody asked for this, so it lands in the transcript most recently in use
+      // rather than in every open window at once.
+      const owner = ownerSession();
+      broadcast("info", { message: `[scheduled] ${t.id}` }, owner);
+      broadcast("notify", { title: `Scheduled: ${t.id}`, body: t.prompt }, owner);
       // A prompt of "flow:<id>" runs a saved flow instead of a chat turn — reuses
       // the existing schedule format, so no migration and no extra UI.
       if (t.prompt.startsWith("flow:")) void runFlowById(t.prompt.slice(5).trim());
-      else void runTurn(t.prompt);
+      else void runTurn(t.prompt, owner);
       break; // one at a time
     }
   }
@@ -641,8 +746,14 @@ Bun.serve({
     if (req.method !== "GET" && req.method !== "HEAD" && !sameOrigin(req))
       return new Response("forbidden", { status: 403 });
 
-    // static
-    if (p === "/") return new Response(Bun.file(join(PUBLIC, "index.html")));
+    // static. Loading the page is what mints a session: httpOnly so no script can
+    // read the id, SameSite=Strict so another origin can't drive this one's chat.
+    if (p === "/") {
+      const s = sessionFor(req);
+      return new Response(Bun.file(join(PUBLIC, "index.html")), {
+        headers: { "set-cookie": `${SID_COOKIE}=${s.id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL / 1000}` },
+      });
+    }
     // Vite build output: /assets/<name>-<hash>.js|css. The regex is the traversal
     // guard — no slashes, no dots-dots, so join() can't escape PUBLIC.
     if (/^\/assets\/[\w.-]+\.(js|css|map|svg|png|jpe?g|gif|webp|woff2?)$/.test(p))
@@ -688,15 +799,18 @@ Bun.serve({
 
     // SSE stream
     if (p === "/events") {
+      // Attaches to the caller's own session, so a turn in another window never
+      // reaches this stream.
+      const s = sessionFor(req);
       let ref: ReadableStreamDefaultController;
       const stream = new ReadableStream({
         start(c) {
           ref = c;
-          clients.add(c);
+          s.clients.add(c);
           c.enqueue(enc.encode(": connected\n\n"));
         },
         cancel() {
-          clients.delete(ref);
+          s.clients.delete(ref);
         },
       });
       return new Response(stream, {
@@ -712,7 +826,7 @@ Bun.serve({
           if (!message) return noContent();
           if (!built.hasKey()) return Response.json({ error: "no-key" }, { status: 400 });
           if (busy) return Response.json({ error: "busy" }, { status: 409 });
-          void runTurn(message);
+          void runTurn(message, sessionFor(req));
           return noContent();
         }
         case "/confirm": {
@@ -752,37 +866,45 @@ Bun.serve({
           else if (b.action === "resume") currentRun.resume();
           else if (b.action === "stop") currentRun.stop();
           const state = currentRun?.state ?? "idle";
-          broadcast("flow", { type: "state", state });
+          broadcastAll("flow", { type: "state", state }); // shared canvas, like the rest of the flow events
           return Response.json({ state });
         }
-        case "/new":
-          built.agent.reset();
-          resetTodos();
-          broadcast("context", built.agent.stats());
+        // Clears only the caller's conversation — another window's chat is not
+        // this window's to throw away.
+        case "/new": {
+          const s = sessionFor(req);
+          s.agent.reset();
+          s.todos = [];
+          if (active === s) resetTodos();
+          broadcast("context", s.agent.stats(), s);
           return noContent();
+        }
         // Compact on demand, rather than waiting for the budget to force it —
         // useful right before handing the agent a big task. Refused mid-turn:
         // rewriting history while a request is in flight would corrupt it.
-        case "/compact":
+        case "/compact": {
           if (busy) return Response.json({ ok: false, reason: "busy" }, { status: 409 });
+          const s = sessionFor(req);
           let landed = false;
-          await built.agent.compact((e) => {
-            if (e.type === "info") broadcast("info", { message: e.message });
-            else if (e.type === "context") broadcast("context", e.stats);
+          await s.agent.compact((e) => {
+            if (e.type === "info") broadcast("info", { message: e.message }, s);
+            else if (e.type === "context") broadcast("context", e.stats, s);
             else if (e.type === "compaction") {
               landed = true;
-              broadcast("compaction", { items: e.items, pruned: e.pruned, manual: true, summary: e.summary });
+              broadcast("compaction", { items: e.items, pruned: e.pruned, manual: true, summary: e.summary }, s);
             }
           });
           // A conversation short enough to have nothing to fold still deserves an
           // answer — a click that produces no row at all reads as a broken button.
-          if (!landed) broadcast("info", { message: "nothing to compact yet" });
-          broadcast("context", built.agent.stats());
+          if (!landed) broadcast("info", { message: "nothing to compact yet" }, s);
+          broadcast("context", s.agent.stats(), s);
           return noContent();
+        }
         case "/model":
           if (b.id) {
             built.setModel(b.id);
-            broadcast("model", { model: b.id });
+            // Machine-level: one model, every session. Announce it to all of them.
+            broadcastAll("model", { model: b.id });
           }
           return html(settingsFragment());
         case "/keys": {
@@ -901,8 +1023,11 @@ Bun.serve({
           // directly (the agent-control ones aren't usable without a model turn)
           toolNames: built.toolNames.filter((t) => !["spawn_agent", "loop_task", "run_flow", "render_ui", "ask_user"].includes(t)),
           toolArgs: built.toolArgs, // arg fields per tool, read off each tool's schema
-          context: built.agent.stats(), // seeds the context strip on page load
-          todos: todoItems(), // seeds the task list too
+          // Both seed the page on load, so they must describe the CALLER's
+          // conversation — reading the live todo module here would hand a
+          // reloading tab whatever another session is mid-way through.
+          context: sessionFor(req).agent.stats(),
+          todos: sessionFor(req).todos,
           maptilerKey: process.env.MAPTILER_KEY ?? "",
         });
     }
