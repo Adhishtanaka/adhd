@@ -83,6 +83,11 @@
               <span class="flex items-center gap-1"><i class="ctx-key" data-k="tool"></i>tools</span>
               <span class="flex items-center gap-1"><i class="ctx-key" data-k="assistant"></i>reply</span>
               <span id="ctx-read" class="ml-auto"></span>
+              <!-- Compaction normally fires on its own once the budget is hit. This
+                   is for doing it early — clearing room deliberately before handing
+                   over a big task, rather than mid-way through one. -->
+              <button id="ctx-compact" class="underline decoration-dotted underline-offset-2 hover:text-paper transition-colors disabled:opacity-40 disabled:no-underline"
+                      title="Prune old tool output and summarise earlier turns now" aria-label="Compact context">compact</button>
             </div>
           </div>
         </footer>

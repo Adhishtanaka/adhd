@@ -750,6 +750,17 @@ Bun.serve({
           resetTodos();
           broadcast("context", built.agent.stats());
           return noContent();
+        // Compact on demand, rather than waiting for the budget to force it —
+        // useful right before handing the agent a big task. Refused mid-turn:
+        // rewriting history while a request is in flight would corrupt it.
+        case "/compact":
+          if (busy) return Response.json({ ok: false, reason: "busy" }, { status: 409 });
+          await built.agent.compact((e) => {
+            if (e.type === "info") broadcast("info", { message: e.message });
+            else if (e.type === "context") broadcast("context", e.stats);
+          });
+          broadcast("context", built.agent.stats());
+          return noContent();
         case "/model":
           if (b.id) {
             built.setModel(b.id);

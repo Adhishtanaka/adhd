@@ -25,6 +25,7 @@ export type ContextStats = {
   window: number; // the model's real context, in chars — the strip's denominator
   model: string;
   compactions: number;
+  pruned: number; // chars reclaimed by tool-result pruning, cumulative
   segments: ContextSeg[];
 };
 
@@ -62,6 +63,7 @@ export type Agent = {
   setTools(tools: Record<string, Tool>): void; // hot-swap the tool set (capability toggles)
   setContext(budget: number, window: number, model: string): void; // re-size after a model swap
   stats(): ContextStats; // current occupancy, for the strip + /state
+  compact(onEvent: (e: AgentEvent) => void): Promise<void>; // force a pass now (/compact)
   reset(): void; // clear conversation history (new chat)
 };
 
@@ -99,6 +101,57 @@ export function splitOldest(h: ModelMessage[], target: number): ModelMessage[] {
     }
   }
   return dropped;
+}
+
+// Tool output is both the biggest thing in a context window and the cheapest to
+// shrink: keep the head and tail of an over-long result, replace the middle with
+// a marker saying what went. Deterministic and model-free, so it runs BEFORE the
+// summarizer and often makes that call unnecessary. Head > tail because tool
+// output front-loads the useful part (a file's imports, a search's best hits)
+// while the tail is usually the truncation notice or the last few rows.
+// Lifted from deepseek-harness's compaction-tool-result-pruner, same shape.
+const PRUNE_THRESHOLD = 4000;
+const PRUNE_HEAD = 2000;
+const PRUNE_TAIL = 800;
+
+// Returns null when `t` is already within budget — the caller uses that to skip
+// rewriting the message at all. Slices by code point, not UTF-16 unit, so a cut
+// can't land inside a surrogate pair and produce a lone half of an emoji.
+export function pruneText(t: string): string | null {
+  const pts = Array.from(t);
+  if (pts.length <= PRUNE_THRESHOLD) return null;
+  const gone = pts.length - PRUNE_HEAD - PRUNE_TAIL;
+  return (
+    pts.slice(0, PRUNE_HEAD).join("") +
+    `\n\n[... ${gone} chars of tool output pruned ...]\n\n` +
+    pts.slice(-PRUNE_TAIL).join("")
+  );
+}
+
+// Prune every over-long tool result in h[0..protect). Mutates in place (the
+// history array is the agent's own) and returns the chars reclaimed. `protect`
+// is normally the index of the newest user message: the current turn's tool
+// output is what the model is actively reasoning about, so it's left whole.
+export function pruneToolResults(h: ModelMessage[], protect: number): number {
+  let saved = 0;
+  for (let i = 0; i < Math.min(protect, h.length); i++) {
+    const m = h[i];
+    if (m.role !== "tool" || !Array.isArray(m.content)) continue;
+    for (const part of m.content as any[]) {
+      if (part?.type !== "tool-result") continue;
+      // Output is {type:"text"|"error-text", value:string} or {type:"json", value:any}.
+      // JSON blobs are the fat ones, so stringify and prune those too — what's
+      // left is a marker-bearing excerpt either way, not something to re-parse.
+      const v = part.output?.value;
+      if (v === undefined) continue;
+      const text = typeof v === "string" ? v : JSON.stringify(v);
+      const short = pruneText(text);
+      if (short === null) continue;
+      saved += text.length - short.length;
+      part.output = { type: "text", value: short };
+    }
+  }
+  return saved;
 }
 
 const COMPACT_SYSTEM =
@@ -175,6 +228,7 @@ export function createAgent(opts: {
   let window = opts.contextWindow ?? budget * 4;
   let modelId = "";
   let compactions = 0;
+  let pruned = 0; // chars reclaimed by tool-result pruning, for the strip readout
   const history: ModelMessage[] = [];
   // Running summary of everything trimmed out of `history`, folded into the system
   // prompt so the model still "remembers" the gist instead of forgetting it. Grows
@@ -210,19 +264,38 @@ export function createAgent(opts: {
       window,
       model: modelId,
       compactions,
+      pruned,
       segments,
     };
   }
 
-  // When history outgrows the budget, summarize the oldest messages into `summary`
-  // rather than dropping them outright. On any summarizer failure (e.g. the compaction
-  // call itself is rate-limited) the messages stay dropped — no worse than before.
-  async function compact(onEvent: (e: AgentEvent) => void): Promise<void> {
+  // Two passes, cheapest first. Pruning old tool output is deterministic and
+  // free, so it runs before the summarizer and usually recovers enough on its
+  // own — the model call only happens when the conversation itself is the bulk.
+  // On any summarizer failure (e.g. the compaction call is itself rate-limited)
+  // the messages stay dropped — no worse than before.
+  async function compact(onEvent: (e: AgentEvent) => void, force = false): Promise<void> {
     const room = historyBudget();
-    const historySize = history.reduce((s, m) => s + msgSize(m), 0);
-    if (summary.length + historySize <= room) return;
+    const size = () => summary.length + history.reduce((s, m) => s + msgSize(m), 0);
+    if (!force && size() <= room) return;
+
+    // Everything before the newest user message is fair game; the current turn's
+    // tool output is what the model is reasoning about right now, so it stays whole.
+    const saved = pruneToolResults(history, Math.max(0, history.findLastIndex((m) => m.role === "user")));
+    if (saved) {
+      pruned += saved;
+      onEvent({ type: "info", message: `pruned ${saved} chars of earlier tool output` });
+    }
+    if (!force && size() <= room) {
+      onEvent({ type: "context", stats: stats() });
+      return;
+    }
+
     const dropped = splitOldest(history, room * KEEP_RATIO);
-    if (!dropped.length) return;
+    if (!dropped.length) {
+      if (saved) onEvent({ type: "context", stats: stats() });
+      return;
+    }
     try {
       summary = cap(await summarizeMessages(summary, dropped, models[modelIdx], budget), 4000);
       compactions++;
@@ -247,10 +320,12 @@ export function createAgent(opts: {
       modelId = model;
     },
     stats,
+    compact: (onEvent) => compact(onEvent, true),
     reset() {
       history.length = 0;
       summary = "";
       compactions = 0;
+      pruned = 0;
     },
     async send(userText, onEvent) {
       const mark = history.length; // roll back to here if the turn errors with no progress

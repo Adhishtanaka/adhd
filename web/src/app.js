@@ -985,6 +985,7 @@ function connect() {
 function setBusy(v) {
   busy = v;
   sendBtn.disabled = v;
+  ctxCompact.disabled = v; // the server 409s a mid-turn compact; don't offer it
   if (v) setStatus("thinking");
   else statusEl.classList.add("hidden");
 }
@@ -1184,11 +1185,30 @@ function renderContext(s) {
     .filter((g) => g.kind === "system" || g.kind === "schemas")
     .reduce((a, g) => a + g.size, 0);
   const compacted = s.compactions ? ` · ${s.compactions} compaction${s.compactions > 1 ? "s" : ""}` : "";
-  ctxRead.textContent = `${short(s.used)} / ${short(s.budget)} · ${short(fixed)} fixed${compacted}`;
+  // Pruning is the cheap half of compaction and it happens silently, so say what
+  // it bought — otherwise the bar just mysteriously shrinks.
+  const reclaimed = s.pruned ? ` · ${short(s.pruned)} pruned` : "";
+  ctxRead.textContent = `${short(s.used)} / ${short(s.budget)} · ${short(fixed)} fixed${compacted}${reclaimed}`;
   ctxBar.title =
     `${Math.round(pct * 100)}% of budget. ${short(fixed)} chars of that is the system prompt plus ` +
     `tool schemas, sent every message — switch capabilities off in Settings to shrink it.`;
 }
+
+// Manual compaction. Summarising is a model call, so this can take a second —
+// disable the button meanwhile rather than let it queue up duplicate passes.
+// The server refuses with 409 while a turn is in flight; the info/context events
+// it broadcasts land through the normal stream, so there's nothing to render here.
+const ctxCompact = document.getElementById("ctx-compact");
+ctxCompact.onclick = async () => {
+  ctxCompact.disabled = true;
+  ctxCompact.textContent = "compacting…";
+  try {
+    await post("/compact", {});
+  } finally {
+    ctxCompact.disabled = false;
+    ctxCompact.textContent = "compact";
+  }
+};
 
 // --- task list --------------------------------------------------------------
 // The agent's own plan, as it goes. Hidden entirely when there's no list, so a
