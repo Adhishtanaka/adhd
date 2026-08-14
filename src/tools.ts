@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { tool, type Tool } from "ai";
 import { z } from "zod";
 import { ROOTS, allowedRoots, isUnderRoots, allowedCommands, permissionMode } from "./config.js";
@@ -40,12 +41,21 @@ let confirmBash: Confirm = async () => false;
 export function setBashConfirm(fn: Confirm) {
   confirmBash = fn;
 }
+// A flow is a graph the user drew and then chose to run, so its tool steps are
+// already approved by that click — a card per step would just be a clicking
+// exercise, and a scheduled flow has nobody there to click it. Scoped through
+// AsyncLocalStorage, not a module flag, because flow steps run concurrently with
+// a chat turn and must not auto-approve ITS commands.
+const autoApprove = new AsyncLocalStorage<true>();
+export const asPreApproved = <T>(fn: () => Promise<T>): Promise<T> => autoApprove.run(true, fn);
+const preApproved = (): boolean => autoApprove.getStore() === true;
+
 // Reuse the same prompt for any action that needs approval (e.g. loop_task).
 // `trusted` marks a caller that would normally skip the prompt (an MCP server
 // marked trust:"read"); permission mode "ask" overrides that and asks anyway.
 export const confirmAction = (message: string, trusted = false): Promise<boolean> => {
   const mode = permissionMode();
-  if (mode === "auto") return Promise.resolve(true);
+  if (mode === "auto" || preApproved()) return Promise.resolve(true);
   if (trusted && mode !== "ask") return Promise.resolve(true);
   return confirmBash({ command: message });
 };
@@ -79,7 +89,7 @@ export function allowKeyFor(runner: string, command: string): string | null {
 // blanket-approved, otherwise ask.
 async function approve(runner: string, command: string, explain?: string): Promise<boolean> {
   const mode = permissionMode();
-  if (mode === "auto") return true;
+  if (mode === "auto" || preApproved()) return true;
   const allowKey = allowKeyFor(runner, command);
   // "ask" ignores the always-allow list — the whole point of that mode is that
   // nothing runs unseen, including things you approved on a calmer day. The

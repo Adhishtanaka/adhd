@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>adhd</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <script>
+      // Apply saved theme before first paint (no flash of wrong theme).
+      // "system" (default) leaves data-theme unset so the media query decides.
+      (function () {
+        var t = localStorage.getItem("theme") || "system";
+        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      })();
+    </script>
+    <script type="module" src="/src/main.js"></script>
+  </head>
+  <body class="bg-base text-paper font-sans min-h-screen flex">
+    <div id="app-shell" class="flex-1 flex flex-col min-w-0">
+      <header class="flex items-center gap-3 px-5 h-14 border-b border-line shrink-0">
+        <span class="font-display font-bold text-lg tracking-tight">adhd<span class="text-dim">.</span></span>
+        <span class="eyebrow hidden sm:inline">everyday assistant</span>
+        <span id="conn" class="hidden font-mono text-xs text-dim">reconnecting…</span>
+        <div class="ml-auto flex items-center gap-3 font-mono text-xs text-dim">
+          <select id="model-select" aria-label="Model" class="bg-transparent text-paper/70 outline-none cursor-pointer hover:text-paper transition-colors"></select>
+          <!-- Icon buttons: title + aria-label carry the meaning the text used to.
+               stroke="currentColor" so they inherit the hover colour and both themes. -->
+          <button id="new-chat" class="navbtn" title="New chat" aria-label="New chat">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button id="open-flows" class="navbtn" title="Flows" aria-label="Flows">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="15" y="15" width="6" height="6" rx="1.5"/><rect x="15" y="3" width="6" height="6" rx="1.5"/><path d="M9 6h6M18 9v6M9 6a6 6 0 0 0 6 12"/></svg>
+          </button>
+          <button id="open-settings" class="navbtn" title="Settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="chat-area" class="flex-1 flex flex-col min-w-0 home">
+        <main id="log" class="flex-1 overflow-y-auto px-5 py-8 space-y-5 max-w-3xl w-full mx-auto"></main>
+
+        <div id="home-hero" class="max-w-3xl w-full mx-auto">
+          <h1 class="font-display font-semibold text-2xl sm:text-3xl text-paper">Where should we begin?</h1>
+        </div>
+
+        <div id="nokey" class="hidden max-w-3xl w-full mx-auto px-5 pb-2">
+          <div class="frame text-sm">
+            Add your DeepSeek key in <button class="underline text-signal" onclick="openSettings()">Settings</button> to start.
+          </div>
+        </div>
+
+        <footer class="shrink-0">
+          <div id="status" class="hidden max-w-3xl w-full mx-auto px-5 pt-2 font-mono text-xs text-dim flex items-center gap-2">
+            <svg class="text-dim spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="40 16"/></svg>
+            <span id="status-text">thinking</span>
+          </div>
+          <!-- The agent's plan for a multi-step task, above the input where
+               you're already looking. Empty for one-shot questions. -->
+          <div id="todos" class="hidden max-w-3xl w-full mx-auto px-5 pt-2">
+            <div class="frame text-xs space-y-1" id="todo-list"></div>
+          </div>
+          <form id="composer" class="max-w-3xl w-full mx-auto px-5 py-3">
+            <div class="flex gap-2 items-end bg-surface border border-line rounded-3xl px-2 py-1.5 focus-within:border-dim transition-colors">
+              <textarea id="msg" rows="1" placeholder="Ask adhd anything…"
+                class="flex-1 resize-none bg-transparent px-2.5 py-2 text-sm outline-none max-h-40 placeholder:text-dim"></textarea>
+              <button id="send" aria-label="Send" class="shrink-0 grid place-items-center w-9 h-9 rounded-full bg-paper text-base disabled:opacity-30 hover:opacity-90 transition"></button>
+            </div>
+          </form>
+          <!-- Context strip: what's actually filling the window right now. One
+               segment per message, width proportional to its size, so a runaway
+               tool result shows up as a fat block instead of a surprise. Sits
+               under the input — a status readout, not something you act on. -->
+          <div id="ctx" class="hidden max-w-3xl w-full mx-auto px-5 pb-3">
+            <div id="ctx-bar" class="flex gap-px h-1.5 rounded-full overflow-hidden bg-raise" title=""></div>
+            <div class="flex items-center gap-3 pt-1.5 font-mono text-[10px] text-dim">
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="system"></i>system</span>
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="schemas"></i>tools</span>
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="summary"></i>summary</span>
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="user"></i>you</span>
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="tool"></i>tools</span>
+              <span class="flex items-center gap-1"><i class="ctx-key" data-k="assistant"></i>reply</span>
+              <span id="ctx-read" class="ml-auto"></span>
+            </div>
+          </div>
+        </footer>
+      </div>
+    </div>
+
+    <dialog id="lightbox"></dialog>
+
+    <section id="panel" class="hidden fixed inset-0 bg-base overflow-y-auto z-30">
+      <div class="flex items-center gap-3 px-5 h-14 border-b border-line sticky top-0 bg-base">
+        <button class="text-dim hover:text-paper" onclick="closeSettings()">← Back</button>
+        <span class="font-display font-bold">Settings</span>
+      </div>
+      <div id="settings" class="settings p-5 text-sm max-w-2xl mx-auto"></div>
+    </section>
+
+    <!-- Flows: full-screen like #panel. flow.js mounts the React Flow canvas here. -->
+    <section id="flows-panel" class="hidden fixed inset-0 bg-base z-30 flex flex-col"></section>
+  </body>
+</html>

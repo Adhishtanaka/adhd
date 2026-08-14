@@ -1,8 +1,8 @@
 // Flows page: a React Flow canvas for building workflows adhd can run.
 //
-// Loaded as a module (importmap in index.html) with its own React copy — this is
-// a separate root from the UMD React app.js uses for the spec renderer, so the
-// two never share state. Everything here talks to /flows, /flows/run,
+// Its own React root, separate from the one app.js uses for the spec renderer,
+// so the two never share state (same React copy now — Vite dedupes it).
+// Everything here talks to /flows, /flows/run,
 // /flows/control and the `flow` SSE events app.js forwards via window.onFlowEvent.
 //
 // Node semantics (n8n-style, NOT an agent): a node is a function. A prompt node

@@ -1,8 +1,18 @@
 // adhd web UI — SSE transcript, composer, and a React generative-UI renderer
 // (json-render: a flat spec tree dispatched through a component REGISTRY).
-// React/ReactDOM load as UMD globals from the CDN — no build step. HTMX drives
-// settings/memory/schedule/failures/roots forms; the transcript itself stays
-// imperative (append-only log); this file owns the conversation + rich rendering.
+// HTMX drives settings/memory/schedule/failures/roots forms; the transcript
+// itself stays imperative (append-only log); this file owns the conversation +
+// rich rendering.
+import React from "react";
+import * as ReactDOM from "react-dom/client";
+import L from "leaflet";
+import htmx from "htmx.org";
+import mermaid from "mermaid";
+
+// mermaid stays on window: applyTheme() feature-detects it (it used to be a CDN
+// script that might not have loaded yet) and re-initialises on every theme flip.
+window.mermaid = mermaid;
+
 const log = document.getElementById("log");
 const chatArea = document.getElementById("chat-area");
 const setHome = (on) => chatArea.classList.toggle("home", on);

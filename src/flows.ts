@@ -5,7 +5,7 @@ import { generateText, tool, type Tool } from "ai";
 import type { LanguageModel } from "ai";
 import { z } from "zod";
 import { HOME_ROOT } from "./config.js";
-import { cap } from "./tools.js";
+import { cap, asPreApproved } from "./tools.js";
 import { loadMemories } from "./memory.js";
 
 // A flow is a saved graph the user drew on the canvas. Nodes/edges are stored in
@@ -593,7 +593,8 @@ export function flowRunner(opts: {
           const parsed = (t.inputSchema as any)?.safeParse?.(filled);
           if (parsed && !parsed.success)
             throw new Error(`bad arguments for ${name}: ${parsed.error.issues.map((i: any) => `${i.path.join(".") || "?"} ${i.message}`).join("; ")}`);
-          return cap(String(await t.execute(parsed ? parsed.data : filled, {} as any)));
+          // Pre-approved: running the flow WAS the approval (see asPreApproved).
+          return cap(String(await asPreApproved(() => t.execute!(parsed ? parsed.data : filled, {} as any))));
         },
       },
       emit,
