@@ -920,19 +920,17 @@ function connect() {
   on("render_ui", (d) => {
     current = null;
     const node = renderSpec(d.spec);
-    // A content card (anything but sources / follow-up chips) carries the body,
-    // so the trailing prose gets trimmed to one intro line in `done`.
     const kind = KIND[d.spec.elements?.[d.spec.root]?.type];
     if (kind === "sources" || kind === "related") {
       // Sources and follow-ups belong below the answer no matter when the model
       // emits them — hold them and re-append at turn end.
       if (node) floatBottom.push({ kind, node });
-    } else if (["image", "images", "video", "illustration", "diagram", "map"].includes(kind)) {
-      // Media leads the answer; the model writes the details as prose below it,
-      // so DON'T mark the turn as card-carried — keep that trailing prose.
-      // A mermaid diagram / map is media too: dropping the prose under it loses
-      // the actual answer and leaves only the picture.
-    } else if (kind) contentCardThisTurn = true;
+    } else if (d.carries) {
+      // `carries` is the server's call (render.ts carriesAnswer), the same verdict
+      // it gave the model in the tool result. Deciding it again here is how the two
+      // ended up disagreeing and dropping the prose that held the actual answer.
+      contentCardThisTurn = true;
+    }
   });
   on("sub", (d) => add(el("font-mono text-xs text-dim pl-4", d.line)));
   on("info", (d) => add(el("font-mono text-xs text-dim", d.message)));

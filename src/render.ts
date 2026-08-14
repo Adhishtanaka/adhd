@@ -26,6 +26,39 @@ export function setRenderSink(fn: (spec: Spec) => void): void {
   renderSink = fn;
 }
 
+// Content whose data IS the answer — prose after it only restates the cells.
+const STRUCTURED = new Set(["Table", "Metric", "Progress", "List"]);
+// Content that shows rather than tells. A picture of a person answers "what do
+// they look like" and nothing else, so the facts still have to be written under it.
+const MEDIA = new Set(["Image", "Gallery", "Video", "Svg", "Mermaid", "Map"]);
+
+/**
+ * Does this block carry the whole answer, or is it an illustration that still
+ * needs prose beneath it?
+ *
+ * Walks the whole tree rather than reading the root type. The model routinely
+ * frames an image in a Card — a person, a place, a product — and judging by the
+ * root alone classified that as a self-contained answer, so the model was told
+ * to write nothing and the actual details were never given at all: the user got
+ * a photo, a link and some follow-up chips.
+ *
+ * Structured content wins over media, because "Table/Metric inside a Card" is
+ * the shape the catalog prompt asks for in a report, and there the card really
+ * is the answer.
+ */
+export function carriesAnswer(spec: Spec): boolean {
+  const root = spec.elements?.[spec.root]?.type;
+  // Sources and follow-up chips are chrome, never content. Treating them as an
+  // answer told the model to end its turn the moment it cited anything.
+  if (root === "References" || root === "FollowUps") return false;
+  let media = false;
+  for (const el of Object.values(spec.elements ?? {})) {
+    if (STRUCTURED.has(el.type)) return true;
+    if (MEDIA.has(el.type)) media = true;
+  }
+  return !media;
+}
+
 export function renderUiTool(): Tool {
   return tool({
     description:
@@ -33,16 +66,12 @@ export function renderUiTool(): Tool {
     inputSchema: specSchema,
     execute: async (spec) => {
       renderSink(spec);
-      const rootType = spec.elements?.[spec.root]?.type;
-      const isMedia = rootType === "Image" || rootType === "Gallery" || rootType === "Video" || rootType === "Svg";
-      // For MEDIA (image/gallery/video/svg): the picture goes first, and the model
-      // SHOULD now write the details as normal prose below it. For structured
-      // cards (Card/Table/Metric/Map): the card IS the answer — no prose after.
-      return isMedia
-        ? "Media shown — the user can see it. Now write the actual answer as normal prose BELOW it (the facts/details). " +
-            "Do NOT describe the image itself ('the image above shows…') — just give the information."
-        : "UI block rendered — the user can see it. If this was a content card, write NO further text at all: " +
-            "no intro line, no wrap-up, no description of its contents. The card IS the whole answer — end your turn now with zero additional prose.";
+      return carriesAnswer(spec)
+        ? "UI block rendered — the user can see it. This block carries the whole answer, so write NO further text at all: " +
+            "no intro line, no wrap-up, no description of its contents. End your turn now with zero additional prose."
+        : "Shown — the user can see it. This block is an illustration, NOT the answer. Now write the actual answer as " +
+            "normal prose BELOW it (the facts and details the user asked for). Do NOT describe the block itself " +
+            "('the image above shows…') — just give the information.";
     },
   });
 }
@@ -93,10 +122,11 @@ export function catalogPromptSection(): string {
     "Two hard rules to avoid repetition:\n" +
     "1. Cite sources ONCE. Emit at most a SINGLE References block per answer, at the very end. Never repeat the same " +
     "sources across multiple render_ui calls, and don't restate URLs in prose too.\n" +
-    "2. Don't say the same thing twice, but DO answer. After MEDIA (Image/Gallery/Video/Svg), write your prose answer " +
-    "below it — just don't narrate the picture ('the image above shows…'). After a STRUCTURED card that already carries " +
-    "the whole answer (Card/Table/Map/Metric), write NO additional prose — the card is the answer; end the turn. " +
-    "(References/FollowUps never count as content.)\n" +
+    "2. Don't say the same thing twice, but DO answer. After MEDIA (Image/Gallery/Video/Svg/Mermaid/Map), write your " +
+    "prose answer below it — just don't narrate the picture ('the image above shows…'). A Card that merely FRAMES an " +
+    "image is still media: the photo is not the answer, so the facts go underneath it as prose. Only after STRUCTURED " +
+    "content that already carries the whole answer (Table/Metric/List, or a Card built around them) write NO additional " +
+    "prose — there the block is the answer; end the turn. (References/FollowUps never count as content.)\n" +
     "render_ui is for VISUAL things — diagrams, images, tables, references, a metric or two. It is NOT a " +
     "container for a long written answer. Never pour multiple paragraphs of explanation into Text/Card nodes; the " +
     "written explanation is your normal prose reply. If your render_ui block is mostly words, it belongs in prose instead.\n" +

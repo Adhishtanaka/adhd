@@ -4,7 +4,7 @@ import { marked } from "marked";
 import { buildAgent } from "./setup.js";
 import { setBashConfirm, setAskUser, orAfter } from "./tools.js";
 import { setSubagentSink } from "./subagent.js";
-import { setRenderSink } from "./render.js";
+import { setRenderSink, carriesAnswer } from "./render.js";
 import { sanitize } from "./sanitize.js";
 import { listFailures, clearFailures, removeDomain } from "./failcache.js";
 import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, mcpServers, setMcpServers, setCustomBaseURL, loadConfig, capabilities, setCapabilities, permissionMode, setPermissionMode, disabledTools, setDisabledTools, splitSpec, PROVIDER_KEY, CAPABILITIES, type Capabilities, type KeyName } from "./config.js";
@@ -125,7 +125,11 @@ setRenderSink((spec) => {
         : undefined;
     }
   }
-  broadcast("render_ui", { spec });
+  // Ship the verdict with the spec rather than letting the browser re-derive it:
+  // the model was being told one thing and the transcript deciding another (a Map
+  // counted as media client-side and as a finished answer server-side), so the
+  // prose was suppressed at the source and kept at the sink, or vice versa.
+  broadcast("render_ui", { spec, carries: carriesAnswer(spec) });
 });
 
 
