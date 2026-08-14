@@ -8,6 +8,11 @@ export type AgentEvent =
   | { type: "tool-result"; id: string; result: unknown }
   | { type: "usage"; total: number }
   | { type: "context"; stats: ContextStats }
+  // A landed compaction, reported as its own event rather than a passing info
+  // line: it's a permanent edit to what the model can see, so the transcript
+  // marks the spot. `summary` is "" when the summarizer didn't run or failed —
+  // the row still says what was cut, it just has nothing to expand.
+  | { type: "compaction"; items: number; pruned: number; summary: string }
   | { type: "info"; message: string }
   | { type: "error"; message: string };
 
@@ -77,6 +82,12 @@ const HISTORY_BUDGET = 8000;
 // merely under budget) so the next turn has headroom and doesn't re-compact
 // immediately. ponytail: fixed hysteresis, make it config only if it ever matters.
 const KEEP_RATIO = 0.5;
+// A hand-triggered compaction isn't reacting to pressure — you're deliberately
+// clearing the desk before a big task — so it ignores the budget and folds
+// everything but the recent tail into the summary. Budget-relative targets are
+// useless here: under budget they'd find nothing to drop and the click would do
+// nothing at all. ponytail: fixed tail, make it config if anyone wants a dial.
+const FORCE_KEEP = 4000;
 
 function msgSize(m: ModelMessage): number {
   return typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length;
@@ -282,27 +293,27 @@ export function createAgent(opts: {
     // Everything before the newest user message is fair game; the current turn's
     // tool output is what the model is reasoning about right now, so it stays whole.
     const saved = pruneToolResults(history, Math.max(0, history.findLastIndex((m) => m.role === "user")));
-    if (saved) {
-      pruned += saved;
-      onEvent({ type: "info", message: `pruned ${saved} chars of earlier tool output` });
-    }
-    if (!force && size() <= room) {
-      onEvent({ type: "context", stats: stats() });
-      return;
+    pruned += saved;
+
+    let items = 0;
+    let landed = ""; // the summary THIS pass produced, "" if it didn't run or failed
+    if (force || size() > room) {
+      const dropped = splitOldest(history, force ? FORCE_KEEP : room * KEEP_RATIO);
+      items = dropped.length;
+      if (items) {
+        try {
+          summary = cap(await summarizeMessages(summary, dropped, models[modelIdx], budget), 4000);
+          landed = summary;
+          compactions++;
+        } catch {
+          // Dropped stays dropped — same outcome as the old hard-trim. The row
+          // still reports the cut, it just has no summary to disclose.
+        }
+      }
     }
 
-    const dropped = splitOldest(history, room * KEEP_RATIO);
-    if (!dropped.length) {
-      if (saved) onEvent({ type: "context", stats: stats() });
-      return;
-    }
-    try {
-      summary = cap(await summarizeMessages(summary, dropped, models[modelIdx], budget), 4000);
-      compactions++;
-      onEvent({ type: "info", message: `compacted ${dropped.length} earlier message${dropped.length > 1 ? "s" : ""} into a summary` });
-    } catch {
-      // Dropped stays dropped — same outcome as the old hard-trim. Run continues.
-    }
+    if (!saved && !items) return; // forced pass on an already-small conversation
+    onEvent({ type: "compaction", items, pruned: saved, summary: landed });
     onEvent({ type: "context", stats: stats() });
   }
 

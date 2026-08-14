@@ -163,6 +163,12 @@ async function runTurn(message: string) {
         case "context":
           broadcast("context", e.stats);
           break;
+        // Summary goes over as plain text, not rendered markdown: it's a prose
+        // blob dense with figures like "~400 words", which GFM reads as
+        // strikethrough. Nothing to sanitize either, since nothing becomes HTML.
+        case "compaction":
+          broadcast("compaction", { items: e.items, pruned: e.pruned, summary: e.summary });
+          break;
         case "info":
           broadcast("info", { message: e.message });
           break;
@@ -755,10 +761,18 @@ Bun.serve({
         // rewriting history while a request is in flight would corrupt it.
         case "/compact":
           if (busy) return Response.json({ ok: false, reason: "busy" }, { status: 409 });
+          let landed = false;
           await built.agent.compact((e) => {
             if (e.type === "info") broadcast("info", { message: e.message });
             else if (e.type === "context") broadcast("context", e.stats);
+            else if (e.type === "compaction") {
+              landed = true;
+              broadcast("compaction", { items: e.items, pruned: e.pruned, manual: true, summary: e.summary });
+            }
           });
+          // A conversation short enough to have nothing to fold still deserves an
+          // answer — a click that produces no row at all reads as a broken button.
+          if (!landed) broadcast("info", { message: "nothing to compact yet" });
           broadcast("context", built.agent.stats());
           return noContent();
         case "/model":

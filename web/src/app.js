@@ -944,6 +944,7 @@ function connect() {
   // answers the question people were actually reading the counter for.
   // Occupancy, not spend — the header counter answers the other question.
   on("context", (d) => renderContext(d));
+  on("compaction", (d) => compactionRow(d));
   on("todos", (d) => renderTodos(d.items));
   on("busy", (d) => setBusy(d.busy));
   on("model", (d) => (modelEl.value = d.model));
@@ -984,10 +985,16 @@ function connect() {
 }
 function setBusy(v) {
   busy = v;
-  sendBtn.disabled = v;
   ctxCompact.disabled = v; // the server 409s a mid-turn compact; don't offer it
+  // The composer stays live while the agent works — sending now queues rather
+  // than being swallowed, so the button must stay clickable and the placeholder
+  // has to say what pressing it will actually do.
+  msg.placeholder = v ? "Queue a message…" : "Ask adhd anything…";
   if (v) setStatus("thinking");
-  else statusEl.classList.add("hidden");
+  else {
+    statusEl.classList.add("hidden");
+    drainQueue();
+  }
 }
 
 // ---- notifications ----
@@ -1066,18 +1073,94 @@ function askCard(d) {
 function post(url, body) {
   return fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 }
-composer.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const text = msg.value.trim();
-  if (!text || busy) return;
+// ---- send queue -------------------------------------------------------------
+// A message typed mid-turn used to be dropped on the floor. It waits here
+// instead and sends itself when the agent frees up, editable and removable until
+// then. Lifted from deepseek-harness's QueueDock, minus the server: the queue is
+// purely client-side, so a refresh loses it — which is fine, nothing has been
+// said to the agent yet. ponytail: no steer action, that one needs the server to
+// interrupt a running turn and adhd can't.
+const queueEl = document.getElementById("queue");
+let queued = [];
+
+function renderQueue() {
+  queueEl.replaceChildren();
+  queueEl.classList.toggle("hidden", queued.length === 0);
+  queued.forEach((text, i) => {
+    const row = el("frame flex items-center gap-2 py-1.5 font-mono text-[11px] text-dim");
+    row.append(icon("clock", "w-3.5 h-3.5 shrink-0 opacity-60"));
+
+    const preview = el("flex-1 truncate", text);
+    preview.title = text; // full text on hover — the row itself stays one line
+    row.append(preview);
+
+    const act = (name, label, fn) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "shrink-0 opacity-60 hover:opacity-100 hover:text-paper transition";
+      b.title = label;
+      b.setAttribute("aria-label", `${label} queued message`);
+      b.append(icon(name, "w-3.5 h-3.5"));
+      b.onclick = fn;
+      return b;
+    };
+
+    row.append(
+      act("edit", "Edit", () => {
+        const input = document.createElement("input");
+        input.className = "flex-1 bg-transparent text-paper outline-none";
+        input.value = text;
+        input.setAttribute("aria-label", "Edit queued message");
+        const commit = (save) => {
+          if (save && input.value.trim()) queued[i] = input.value.trim();
+          renderQueue();
+        };
+        input.onkeydown = (e) => {
+          if (e.key === "Enter") (e.preventDefault(), commit(true));
+          if (e.key === "Escape") commit(false);
+        };
+        input.onblur = () => commit(true);
+        preview.replaceWith(input);
+        input.focus();
+      }),
+      act("x", "Remove", () => {
+        queued.splice(i, 1);
+        renderQueue();
+      }),
+    );
+    queueEl.append(row);
+  });
+}
+
+async function send(text) {
   userBubble(text);
-  msg.value = "";
-  msg.style.height = "auto";
   const r = await post("/chat", { message: text });
   if (r.status === 400) {
     nokey.classList.remove("hidden");
     openSettings();
   }
+}
+
+// Drain one message per idle transition: /chat flips busy back on immediately,
+// so the next one waits for the turn after. Sequential by construction.
+function drainQueue() {
+  if (busy || !queued.length) return;
+  void send(queued.shift());
+  renderQueue();
+}
+
+composer.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = msg.value.trim();
+  if (!text) return;
+  msg.value = "";
+  msg.style.height = "auto";
+  if (busy) {
+    queued.push(text);
+    renderQueue();
+    return;
+  }
+  await send(text);
 });
 msg.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
@@ -1113,6 +1196,8 @@ newChatBtn.onclick = async () => {
   pinned = true;
   setHome(true);
   ctxEl.classList.add("hidden"); // server also broadcasts a fresh context on /new
+  queued = []; // anything still waiting was meant for the conversation just discarded
+  renderQueue();
   renderTodos([]);
 };
 
@@ -1192,6 +1277,33 @@ function renderContext(s) {
   ctxBar.title =
     `${Math.round(pct * 100)}% of budget. ${short(fixed)} chars of that is the system prompt plus ` +
     `tool schemas, sent every message — switch capabilities off in Settings to shrink it.`;
+}
+
+// A landed compaction, marked in the transcript where it happened. Everything
+// above the line is no longer what the model sees, so this is a permanent edit
+// to the conversation and deserves a row rather than a toast that scrolls away.
+// Collapsed by default; expands to the summary that replaced the history.
+// Native <details> does the disclosure — no state to track, and the keyboard and
+// aria behaviour come free. Mirrors deepseek-harness's CompactionItem, including
+// staying non-expandable when the summariser produced nothing to show.
+function compactionRow(d) {
+  const bits = [];
+  if (d.items) bits.push(`${d.items} message${d.items > 1 ? "s" : ""} summarised`);
+  if (d.pruned) bits.push(`${short(d.pruned)} chars of tool output pruned`);
+  if (!bits.length) return;
+
+  const row = document.createElement(d.summary ? "details" : "div");
+  row.className = "group my-3 border-t border-line pt-2 font-mono text-[11px] text-dim";
+  const head = document.createElement(d.summary ? "summary" : "div");
+  head.className =
+    "flex items-center gap-2" + (d.summary ? " cursor-pointer list-none hover:text-paper transition-colors" : "");
+  head.append(icon("layers", "w-3.5 h-3.5 shrink-0"), el("", `${d.manual ? "compacted" : "auto-compacted"} · ${bits.join(" · ")}`));
+  if (d.summary) head.append(el("ml-auto opacity-60 group-open:hidden", "summary"));
+  row.append(head);
+  // textContent, not markdown: the summary is prose full of "~400"-style figures
+  // that GFM would render as strikethrough, and plain text needs no sanitising.
+  if (d.summary) row.append(el("mt-2 whitespace-pre-wrap border-l border-line pl-3 leading-relaxed text-paper/80", d.summary));
+  add(row);
 }
 
 // Manual compaction. Summarising is a model call, so this can take a second —

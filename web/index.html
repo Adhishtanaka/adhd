@@ -62,6 +62,10 @@
           <div id="todos" class="hidden max-w-3xl w-full mx-auto px-5 pt-2">
             <div class="frame text-xs space-y-1" id="todo-list"></div>
           </div>
+          <!-- Queued messages. Typing while the agent is working used to be
+               swallowed; now it lands here and sends itself when the turn ends.
+               Each row is editable and removable right up until it goes. -->
+          <div id="queue" class="hidden max-w-3xl w-full mx-auto px-5 pt-2 space-y-1"></div>
           <form id="composer" class="max-w-3xl w-full mx-auto px-5 py-3">
             <div class="flex gap-2 items-end bg-surface border border-line rounded-3xl px-2 py-1.5 focus-within:border-dim transition-colors">
               <textarea id="msg" rows="1" placeholder="Ask adhd anything…"
