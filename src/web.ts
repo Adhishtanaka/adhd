@@ -413,22 +413,53 @@ function settingsFragment(): string {
   // permission in the browser); app.js wires #appearance-select / #notif-toggle
   // on each settings swap. Everything else is server state via HTMX fragments.
   //
-  // Nine flat sections was one long scroll, so they're grouped by the question
-  // each answers. <details> gives collapse with no JS and keyboard support for
-  // free; only the group you most often come here to change starts open. A swap
-  // of #settings re-renders this, so open/closed resets to these defaults.
-  const group = (title: string, note: string, body: string, open = false): string =>
-    `<details class="settings-group"${open ? " open" : ""}>
-      <summary>${title}${note ? ` <span class="muted">${note}</span>` : ""}</summary>
+  // Keep related controls on focused tab panels instead of one long accordion.
+  // app.js restores the active tab after HTMX replaces this fragment.
+  const tab = (id: string, title: string, note: string, body: string): string =>
+    `<section id="settings-panel-${id}" class="settings-tab-panel" role="tabpanel" aria-labelledby="settings-tab-${id}" data-settings-panel="${id}" hidden>
+      <div class="settings-tab-heading"><h1>${title}</h1><p class="muted">${note}</p></div>
       ${body}
-    </details>`;
+    </section>`;
 
   const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
-  return (
-    group(
+  return `<div class="settings-tabs" role="tablist" aria-label="Settings sections">
+      <button type="button" role="tab" id="settings-tab-general" data-settings-tab="general" aria-controls="settings-panel-general">General</button>
+      <button type="button" role="tab" id="settings-tab-models" data-settings-tab="models" aria-controls="settings-panel-models">Models</button>
+      <button type="button" role="tab" id="settings-tab-tools" data-settings-tab="tools" aria-controls="settings-panel-tools">Tools</button>
+      <button type="button" role="tab" id="settings-tab-access" data-settings-tab="access" aria-controls="settings-panel-access">Access</button>
+      <button type="button" role="tab" id="settings-tab-memory" data-settings-tab="memory" aria-controls="settings-panel-memory">Memory</button>
+    </div>
+    <div class="settings-panels">` +
+    tab(
+      "general",
+      "General",
+      "Appearance, notifications, and browser state.",
+      `<h2>Appearance</h2>
+      <div class="settings-section">
+        <div class="row">
+          <span>Theme</span>
+          <select id="appearance-select">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+      </div>
+      <h2>Notifications</h2>
+      <div class="settings-section">
+        <div class="row">
+          <span>Notify when a scheduled task runs</span>
+          <label class="switch"><input type="checkbox" id="notif-toggle" /><span class="track"></span></label>
+        </div>
+      </div>
+      <h2>Blocked pages <span class="muted">(fetch failures)</span></h2>
+      <div class="settings-section"><div id="fails">${failuresFragment()}</div></div>`,
+    ) +
+    tab(
+      "models",
       "Keys",
-      "models and web search",
+      "Connect model providers and choose a custom endpoint.",
       `<p class="muted">Stored in <span class="mono">~/.adhd/secrets.json</span> (chmod 600). Keys never leave this machine.
        You only need a key for the provider you actually use — a model is named <span class="mono">provider:id</span>
        (<span class="mono">anthropic:claude-sonnet-5</span>), and a bare id means DeepSeek.</p>
@@ -450,64 +481,37 @@ function settingsFragment(): string {
           </form>
         </div>
       </div>`,
-      true,
     ) +
-    group(
+    tab(
+      "tools",
       "Capabilities",
-      `${built.toolNames.length} of ${built.allToolNames.length} tools active`,
+      `${built.toolNames.length} of ${built.allToolNames.length} tools are active.`,
       `<p class="muted">Everything switched on here is sent to the model on every message, whether you use it or not.
        Switch off what this chat doesn't need and the context goes further.</p>
       <div class="settings-section">${capsFragment()}</div>`,
     ) +
-    group(
-      "Permissions",
-      MODE_LABEL[permissionMode()][0].toLowerCase(),
+    tab(
+      "access",
+      "Access",
+      `Permission mode: ${MODE_LABEL[permissionMode()][0].toLowerCase()}.`,
       `<p class="muted">When adhd should stop and ask before doing something to your machine.</p>
-      <div class="settings-section">${permissionsFragment()}</div>`,
-    ) +
-    group(
-      "What adhd may do",
-      `${n(allowedRoots().length, "folder")} · ${n(allowedCommands().length, "command")} · ${n(Object.keys(mcpServers()).length, "server")}`,
-      `<h2>Local folders <span class="muted">(files adhd may read)</span></h2>
+      <div class="settings-section">${permissionsFragment()}</div>
+      <h2>Local folders <span class="muted">(${n(allowedRoots().length, "folder")})</span></h2>
       <div class="settings-section"><div id="roots">${rootsFragment()}</div></div>
-      <h2>Always-allowed commands <span class="muted">(run without asking)</span></h2>
+      <h2>Always-allowed commands <span class="muted">(${n(allowedCommands().length, "command")})</span></h2>
       <div class="settings-section"><div id="allowed">${allowedFragment()}</div></div>
-      <h2>MCP servers <span class="muted">(extra tools)</span></h2>
+      <h2>MCP servers <span class="muted">(${n(Object.keys(mcpServers()).length, "server")})</span></h2>
       <div class="settings-section"><div id="mcp">${mcpFragment()}</div></div>`,
     ) +
-    group(
-      "What adhd remembers",
-      `${n(built.memoryIds.length, "memory", "memories")} · ${n(loadSchedule().length, "task")}`,
+    tab(
+      "memory",
+      "Memory",
+      `${n(built.memoryIds.length, "memory", "memories")} and ${n(loadSchedule().length, "scheduled task")}.`,
       `<h2>Memory</h2>
       <div class="settings-section"><div id="mem">${memoryFragment()}</div></div>
       <h2>Schedule</h2>
       <div class="settings-section"><div id="sched">${scheduleFragment()}</div></div>`,
-    ) +
-    group(
-      "App",
-      "appearance, notifications, blocked pages",
-      `<h2>Appearance</h2>
-      <div class="settings-section">
-        <div class="row">
-          <span>Theme</span>
-          <select id="appearance-select">
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </div>
-      </div>
-      <h2>Notifications</h2>
-      <div class="settings-section">
-        <div class="row">
-          <span>Notify when a scheduled task runs</span>
-          <label class="switch"><input type="checkbox" id="notif-toggle" /><span class="track"></span></label>
-        </div>
-      </div>
-      <h2>Blocked pages <span class="muted">(fetch failures)</span></h2>
-      <div class="settings-section"><div id="fails">${failuresFragment()}</div></div>`,
-    )
-  );
+    ) + `</div>`;
 }
 
 function rootsFragment(): string {

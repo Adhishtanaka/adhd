@@ -100,7 +100,7 @@ function el(cls, text) {
   return d;
 }
 function block(label, node) {
-  const wrap = el("");
+  const wrap = el("assistant-block");
   wrap.append(el("eyebrow mb-1.5", label), node);
   return wrap;
 }
@@ -1211,6 +1211,29 @@ document.body.addEventListener("htmx:afterSwap", (e) => {
 // The settings fragment is server-rendered HTML (HTMX); wire its client-only
 // controls (theme + notifications) after each swap.
 function wireSettings() {
+  const tabs = [...document.querySelectorAll("[data-settings-tab]")];
+  const panels = [...document.querySelectorAll("[data-settings-panel]")];
+  const selectTab = (id, focus = false) => {
+    if (!tabs.some((tab) => tab.dataset.settingsTab === id)) id = "general";
+    tabs.forEach((tab) => {
+      const active = tab.dataset.settingsTab === id;
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+      if (active && focus) tab.focus();
+    });
+    panels.forEach((section) => (section.hidden = section.dataset.settingsPanel !== id));
+    sessionStorage.setItem("adhd-settings-tab", id);
+  };
+  tabs.forEach((tab, index) => {
+    tab.onclick = () => selectTab(tab.dataset.settingsTab);
+    tab.onkeydown = (e) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+      e.preventDefault();
+      const next = e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : (index + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      selectTab(tabs[next].dataset.settingsTab, true);
+    };
+  });
+  selectTab(sessionStorage.getItem("adhd-settings-tab") || "general");
   const sel = document.getElementById("appearance-select");
   if (sel) {
     sel.value = window.currentThemePref();

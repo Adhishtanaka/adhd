@@ -66,18 +66,24 @@
   --font-display: "Space Grotesk", ui-sans-serif, system-ui;
   --font-mono: ui-monospace, Menlo, monospace;
   --media-max-h: 320px;
+  --c-user-message: 31 78 140;
 }
+body { background-image: radial-gradient(circle at 50% -12rem, rgb(var(--c-accent) / .055), transparent 32rem); }
 @media (max-width: 480px) { :root { --media-max-h: 220px; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { display: inline-block; animation: spin 1s linear infinite; }
 @keyframes fadein { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
-.entry { animation: fadein 0.18s ease-out; }
+.entry { animation: fadein 0.22s cubic-bezier(.2,.75,.25,1); }
 @keyframes pulse-dot { 0%,80%,100% { opacity: 0.25; } 40% { opacity: 1; } }
 .dot { animation: pulse-dot 1.2s infinite; }
 @media (prefers-reduced-motion: reduce) { .spin, .entry, .dot { animation: none; } }
 .eyebrow { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: rgb(var(--c-text-dim)); }
-/* user message — a right-aligned bubble, ChatGPT-style (no rail, no label) */
-.usermsg { background: rgb(var(--c-surface)); border-radius: 18px; padding: 0.65rem 1rem; max-width: 80%; margin-left: auto; }
+/* Conversation rhythm: assistant copy stays open and editorial while user
+   messages are compact, tactile anchors on the right. */
+#log { scroll-padding-block: 2rem; scrollbar-gutter: stable; }
+.assistant-block { max-width: 44rem; padding: .15rem .25rem .3rem; }
+.assistant-block > .eyebrow { opacity: .72; }
+.usermsg { background: rgb(var(--c-user-message)); color: rgb(244 247 252); border: 1px solid rgb(255 255 255 / .07); border-radius: 19px 19px 6px 19px; box-shadow: 0 8px 22px rgb(0 0 0 / .12); line-height: 1.5; padding: 0.7rem 1rem; max-width: min(82%, 34rem); margin-left: auto; }
 /* rendered assistant markdown */
 .md > * + * { margin-top: 0.7rem; }
 .md h1, .md h2, .md h3 { font-family: var(--font-display), sans-serif; font-weight: 600; line-height: 1.25; }
@@ -113,6 +119,17 @@ dialog#lightbox::backdrop { background: rgb(0 0 0 / 0.85); }
 dialog#lightbox img, dialog#lightbox svg { max-width: 96vw; max-height: 96vh; border-radius: 8px; }
 dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; width: 2rem; height: 2rem; border-radius: 999px; background: rgb(var(--c-surface)); color: rgb(var(--c-text)); border: 1px solid rgb(var(--c-border)); cursor: pointer; display: flex; align-items: center; justify-content: center; }
 /* settings */
+.settings-tabs { position: sticky; top: 3.5rem; z-index: 3; display: flex; gap: .25rem; padding: .65rem 0 1rem; overflow-x: auto; scrollbar-width: none; background: rgb(var(--c-bg) / .94); backdrop-filter: blur(16px); }
+.settings-tabs::-webkit-scrollbar { display: none; }
+.settings-tabs [role="tab"] { position: relative; flex: 0 0 auto; padding: .55rem .8rem; border-radius: 10px; color: rgb(var(--c-text-dim)); font-family: var(--font-display); font-size: 12px; font-weight: 600; transition: color .15s, background .15s; }
+.settings-tabs [role="tab"]:hover { color: rgb(var(--c-text)); background: rgb(var(--c-surface) / .65); }
+.settings-tabs [role="tab"][aria-selected="true"] { color: rgb(var(--c-text)); background: rgb(var(--c-surface)); box-shadow: inset 0 0 0 1px rgb(var(--c-border)); }
+.settings-tabs [role="tab"][aria-selected="true"]::after { content: ""; position: absolute; left: 35%; right: 35%; bottom: 3px; height: 2px; border-radius: 2px; background: rgb(var(--c-user-message)); }
+.settings-tab-panel[hidden] { display: none; }
+.settings-tab-panel { animation: fadein .18s ease-out; padding-bottom: 2rem; }
+.settings-tab-heading { margin: .6rem 0 1.35rem; }
+.settings-tab-heading h1 { font-family: var(--font-display); font-size: 1.35rem; font-weight: 700; letter-spacing: -.025em; }
+.settings-tab-heading p { margin-top: .25rem; font-size: 12px; }
 .settings h2 { font-family: var(--font-display); color: rgb(var(--c-text-dim)); font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; margin-top: 1.4rem; margin-bottom: 0.5rem; }
 .settings h2:first-child { margin-top: 0; }
 /* collapsible group — native <details>, so no JS and keyboard support for free */
@@ -169,6 +186,13 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
 :is(button, a, input, textarea, select, [tabindex]):focus-visible { outline: 2px solid rgb(var(--c-accent)); outline-offset: 2px; border-radius: 4px; }
 /* composer: the wrapper pill carries the focus affordance, so the textarea itself shows no ring (avoids a doubled blue border) */
 #msg:focus, #msg:focus-visible { outline: none; }
+#app-shell > header { background: rgb(var(--c-bg) / .82); backdrop-filter: blur(18px) saturate(1.2); position: relative; z-index: 10; }
+#model-select { max-width: 12rem; text-overflow: ellipsis; }
+#composer > div { background: rgb(var(--c-surface) / .92); border-color: rgb(var(--c-border)); box-shadow: 0 10px 34px rgb(0 0 0 / .15), inset 0 1px rgb(255 255 255 / .035); backdrop-filter: blur(18px); transition: border-color .18s, box-shadow .18s, transform .18s; }
+#composer > div:focus-within { border-color: rgb(var(--c-accent) / .68); box-shadow: 0 14px 38px rgb(0 0 0 / .2), 0 0 0 3px rgb(var(--c-accent) / .09); transform: translateY(-1px); }
+#send { background: rgb(var(--c-user-message)); color: rgb(255 255 255); box-shadow: 0 4px 12px rgb(var(--c-user-message) / .3); transition: opacity .15s, transform .15s, box-shadow .15s; }
+#send:not(:disabled):hover { opacity: 1; transform: translateY(-1px); box-shadow: 0 6px 16px rgb(var(--c-user-message) / .4); }
+#send:not(:disabled):active { transform: translateY(0) scale(.96); }
 /* home / empty state: center the hero heading + composer as a group. On the
    first message #chat-area drops .home and reverts to a scrolling transcript
    with a bottom-pinned composer. */
@@ -177,7 +201,7 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
 #chat-area.home { justify-content: center; }
 #chat-area.home > #log { flex: 0 0 auto; overflow: visible; padding-top: 0; padding-bottom: 0; }
 #home-hero { text-align: center; padding: 0 1.25rem 1.5rem; }
-#chat-area:not(.home) > footer { border-top: 1px solid rgb(var(--c-border)); }
+#chat-area:not(.home) > footer { border-top: 1px solid rgb(var(--c-border) / .75); background: linear-gradient(to bottom, rgb(var(--c-bg) / .78), rgb(var(--c-bg))); backdrop-filter: blur(18px); }
 
 /* ---- Flow studio: a quiet, tool-like canvas with strong information hierarchy. ---- */
 .flow-page-head { background: rgb(var(--c-bg) / .92); backdrop-filter: blur(18px); }
@@ -232,4 +256,6 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
 }
 @media (max-width: 640px) {
   #log, #nokey, #composer, #status { padding-left: 0.75rem; padding-right: 0.75rem; }
+  .usermsg { max-width: 88%; }
+  #model-select { max-width: 7.5rem; }
 }
