@@ -65,7 +65,13 @@ async function call(name: string, args: Record<string, unknown>): Promise<string
     throw e;
   });
   const client = await session;
-  return contentToText(await client.callTool({ name, arguments: args as any }));
+  const result = await client.callTool({ name, arguments: args as any });
+  // The MCP spec reports a failed tool call via isError, not a protocol-level
+  // rejection — callTool resolves normally either way. Left unchecked, a page
+  // that failed to load (e.g. "No page selected") hands its error text down
+  // the pipeline as if it were real page content.
+  if ((result as { isError?: boolean })?.isError) throw new Error(contentToText(result));
+  return contentToText(result);
 }
 
 /** Reset between tests; not used by the app. */
@@ -233,12 +239,31 @@ function browserTool(): Tool {
       if (a.action === "screenshot") mkdirSync(join(HOME_ROOT, "shots"), { recursive: true });
 
       let out = "";
-      try {
-        for (const c of p.calls) out = await call(c.name, c.args);
-      } catch (e) {
-        const msg = (e as Error).message;
+      const runCalls = async () => {
+        let last = "";
+        for (const c of p.calls) last = await call(c.name, c.args);
+        return last;
+      };
+      const fail = (msg: string) => {
         if (a.url) recordFailure(a.url, msg);
         return `browser ${a.action} failed: ${msg}. The browser needs Chrome installed and network access to npx; this does NOT mean you lack internet.`;
+      };
+      try {
+        out = await runCalls();
+      } catch (e) {
+        const msg = (e as Error).message;
+        // A browser attached via `--browserUrl` (someone's real Chrome, not our
+        // own isolated launch) can come up with zero tabs, so the first action
+        // fails with "No page selected" instead of doing anything. Open one and
+        // retry, once, rather than handing that error text downstream as if it
+        // were the page's actual content.
+        if (!/no page selected/i.test(msg)) return fail(msg);
+        try {
+          await call("new_page", { url: a.url ?? "about:blank" });
+          out = await runCalls();
+        } catch (e2) {
+          return fail((e2 as Error).message);
+        }
       }
 
       if (a.action === "read") {
