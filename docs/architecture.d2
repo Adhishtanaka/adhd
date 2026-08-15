@@ -1,0 +1,40 @@
+client: Browser {
+  shape: rectangle
+  ui: "index.html + app.js\nchat UI, composer"
+  flow: "flow.js\nFlows canvas"
+}
+
+server: Bun process (src/) {
+  shape: rectangle
+  web: "web.ts\nSSE server, routes, sanitize"
+  setup: "setup.ts\nbuildAgent()"
+  agent: "agent.ts\nturn loop, fallback, retries"
+  tools: "tools.ts\nfiles · shell · web_search"
+  browser: "browser.ts\nbrowser tool"
+  flows: "flows.ts\nFlow graph runner"
+  mcp: "mcp.ts\nMCP servers"
+  extra: "memory.ts · skills.ts\nscheduler.ts · subagent.ts · loop.ts"
+}
+
+mcp_servers: MCP servers\n(stdio) {
+  shape: rectangle
+}
+
+chrome: headless Chrome {
+  shape: rectangle
+}
+
+client.ui -> server.web: "POST /chat"
+client.flow -> server.web: "POST /flows"
+server.web -> client.ui: "SSE stream"
+
+server.web -> server.setup
+server.setup -> server.agent
+server.agent -> server.tools
+server.agent -> server.browser
+server.agent -> server.mcp
+server.agent -> server.extra
+server.agent -> server.flows
+
+server.mcp -> mcp_servers: "stdio"
+server.browser -> chrome: "stdio"
