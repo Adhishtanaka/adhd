@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="adhd is a local-first AI assistant powered by DeepSeek. One process, your files, your rules.">
+  <meta name="theme-color" content="#f2f0e9">
+  <title>adhd — an AI assistant with follow-through</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="#" aria-label="adhd home"><span class="brand-mark">a</span>adhd<span class="dot">.</span></a>
+    <nav aria-label="Primary navigation">
+      <a href="#how">How it works</a><a href="#features">Capabilities</a><a href="#privacy">Privacy</a>
+    </nav>
+    <a class="button button-small" href="https://github.com/Adhishtanaka/adhd">View on GitHub <span aria-hidden="true">↗</span></a>
+  </header>
+
+  <main id="main">
+    <section class="hero section-shell">
+      <div class="hero-copy reveal">
+        <p class="kicker"><span></span> Local-first · DeepSeek-powered</p>
+        <h1>Your ideas move fast.<br><em>Now your assistant does too.</em></h1>
+        <p class="lede">adhd is a personal AI assistant that can actually do the work—browse, write files, run commands, remember context, and automate repeat tasks. One local process. No database. No cloud middleman.</p>
+        <div class="hero-actions">
+          <a class="button" href="https://github.com/Adhishtanaka/adhd#quick-start">Start locally <span aria-hidden="true">→</span></a>
+          <button class="text-button" data-copy="bun install && bun start">Copy install command <span class="copy-status">⌘</span></button>
+        </div>
+        <div class="trust-row" aria-label="Product highlights">
+          <span>MIT licensed</span><span>Keys stay local</span><span>Runs on Bun</span>
+        </div>
+      </div>
+
+      <div class="demo-wrap reveal delay-1" aria-label="Example of adhd completing a task">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+        <div class="terminal-card">
+          <div class="terminal-top"><span class="term-logo">a.</span><span>adhd / deepseek-v4-flash</span><i></i></div>
+          <div class="terminal-body">
+            <div class="prompt"><span>you</span><p>Find a good dinner spot nearby and put it on my calendar.</p></div>
+            <div class="trace">
+              <p><b>✓</b><span>recall</span><small>home/location</small></p>
+              <p><b>✓</b><span>web_search</span><small>restaurants nearby</small></p>
+              <p><b>✓</b><span>browser</span><small>checking hours & reviews</small></p>
+              <p class="active"><b>↗</b><span>calendar</span><small>creating event</small></p>
+            </div>
+            <div class="answer"><span>adhd</span><p>I found a well-rated spot 12 minutes away and added dinner for 7:30 PM. Want me to invite anyone?</p></div>
+          </div>
+          <div class="composer">Ask adhd anything… <span>↑</span></div>
+        </div>
+        <div class="float-note"><b>04</b><span>tools used<br><small>with permission</small></span></div>
+      </div>
+    </section>
+
+    <section class="marquee" aria-label="Capabilities"><div>READ FILES <i>✦</i> SEARCH THE WEB <i>✦</i> BUILD FLOWS <i>✦</i> REMEMBER CONTEXT <i>✦</i> SCHEDULE TASKS <i>✦</i> READ FILES <i>✦</i> SEARCH THE WEB <i>✦</i></div></section>
+
+    <section id="how" class="section-shell statement reveal">
+      <p class="section-index">01 / The idea</p>
+      <div><h2>Chat is only the beginning.</h2><p>Most assistants stop at an answer. adhd keeps going—with tools, memory, scheduled work, and visual workflows that turn intent into outcomes.</p></div>
+    </section>
+
+    <section id="features" class="section-shell features">
+      <article class="feature feature-wide reveal"><p class="num">01</p><div class="feature-icon">↯</div><h3>Act, don't just answer</h3><p>Read and write files, run commands, search the web, browse pages, and render rich results—from one chat box.</p><div class="mini-flow"><span>ask</span><i>→</i><span>think</span><i>→</i><span class="accent">do</span></div></article>
+      <article class="feature reveal delay-1"><p class="num">02</p><div class="feature-icon">◎</div><h3>Local by default</h3><p>Your configuration, memory, schedules, and API keys live on your machine—not in somebody else's database.</p><div class="local-graphic"><span>your machine</span><i></i><i></i><i></i></div></article>
+      <article class="feature dark reveal"><p class="num">03</p><div class="feature-icon">⤨</div><h3>Flows you can see</h3><p>Wire reusable workflows on a visual canvas. Branch, merge, schedule, or launch them straight from chat.</p><div class="nodes"><b>START</b><i></i><b>SEARCH</b><i></i><b>DONE</b></div></article>
+      <article class="feature feature-wide warm reveal delay-1"><p class="num">04</p><div class="deepseek-lockup"><span>DS</span> Powered by DeepSeek</div><h3>Fast reasoning. Serious context.</h3><p>DeepSeek is the ready-to-go default, with streaming tool calls and a large context window. Anthropic, Gemini, and OpenAI-compatible providers are also supported.</p><div class="meter"><span></span></div></article>
+    </section>
+
+    <section id="privacy" class="section-shell privacy reveal">
+      <div><p class="section-index">02 / Built with boundaries</p><h2>You stay in control.</h2></div>
+      <div class="privacy-list">
+        <p><span>01</span><b>Permission modes</b><small>Choose what needs approval before it changes your machine.</small></p>
+        <p><span>02</span><b>Explicit file roots</b><small>Only share the folders you decide the assistant can access.</small></p>
+        <p><span>03</span><b>Your model key</b><small>Credentials stay local and go only to the provider you choose.</small></p>
+      </div>
+    </section>
+
+    <section class="cta section-shell reveal">
+      <p class="kicker"><span></span> Open source · ready to run</p><h2>Give your next idea<br>a place to <em>go.</em></h2>
+      <a class="button light" href="https://github.com/Adhishtanaka/adhd">Get adhd on GitHub <span>↗</span></a>
+    </section>
+  </main>
+
+  <footer class="site-footer section-shell"><a class="brand" href="#"><span class="brand-mark">a</span>adhd<span class="dot">.</span></a><p>Personal AI, without the platform.</p><p>© 2026 · MIT License</p></footer>
+</body>
+</html>
