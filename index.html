@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="adhd is an open-source, local-first DeepSeek AI assistant that can search the web, browse, work with files, run commands, remember context, and automate tasks.">
-  <meta name="theme-color" content="#4d6bfe">
-  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#f4f1e8">
+  <link rel="icon" href="assets/adhd-mark.png" type="image/png">
   <link rel="canonical" href="https://adhishtanaka.github.io/adhd/">
   <link rel="preload" as="image" href="assets/adhd-deepseek-demo.webp" type="image/webp" fetchpriority="high">
   <meta name="robots" content="index, follow, max-image-preview:large">
@@ -17,7 +17,7 @@
   <title>adhd — Local-First DeepSeek AI Assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="theme.css">
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"adhd","applicationCategory":"UtilitiesApplication","operatingSystem":"macOS, Windows, Linux","description":"An open-source, local-first personal AI assistant with DeepSeek support, web browsing, file tools, memory, scheduling, and visual workflows.","url":"https://adhishtanaka.github.io/adhd/","downloadUrl":"https://github.com/Adhishtanaka/adhd","softwareVersion":"0.1.0","license":"https://opensource.org/licenses/MIT","codeRepository":"https://github.com/Adhishtanaka/adhd","programmingLanguage":"TypeScript","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}</script>
@@ -26,7 +26,7 @@
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
-    <a class="brand" href="#"><span class="brand-mark">a</span>adhd<span class="dot">.</span></a>
+    <a class="brand" href="#" aria-label="adhd home"><img src="assets/adhd-mark.png" alt="" width="32" height="32"><span>adhd</span><sup>local</sup></a>
     <nav aria-label="Primary navigation">
       <a href="#how">How it works</a><a href="#features">Capabilities</a><a href="#privacy">Privacy</a><a href="docs/">Documentation</a>
     </nav>
@@ -37,24 +37,25 @@
     <section class="hero section-shell">
       <div class="hero-copy reveal">
         <p class="kicker"><span></span> Local-first · built with the DeepSeek API</p>
-        <h1>A personal AI assistant<br>that runs on <em>your</em> machine.</h1>
+        <h1>Your computer.<br>Your context.<br><em>Your AI.</em></h1>
         <p class="lede">adhd reads and writes files, runs shell commands, searches and browses the web, remembers things about you across sessions, schedules tasks, and automates anything you do repeatedly — all from one local process. No database, no cloud middleman, just the model API you point it at.</p>
         <div class="hero-actions">
           <a class="button" href="https://github.com/Adhishtanaka/adhd#quick-start">Start locally <span aria-hidden="true">→</span></a>
           <button class="text-button" data-copy="bun install && bun start">Copy install command <span class="copy-status">⌘</span></button>
         </div>
         <div class="trust-row" aria-label="Product highlights">
-          <span>MIT licensed</span><span>Keys stay local</span><span>Runs on Bun</span>
+          <span>01 — MIT licensed</span><span>02 — Keys stay local</span><span>03 — Runs on Bun</span>
         </div>
       </div>
 
       <div class="demo-wrap reveal delay-1" aria-label="Real recording of adhd answering a question with DeepSeek">
+        <p class="margin-note">One local process.<br>Nine practical tools.<br>Zero cloud middlemen.</p>
         <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
         <figure class="product-shot hero-shot"><a href="assets/diana-04-images.png" aria-label="Open the full-resolution app screenshot"><img src="assets/adhd-deepseek-demo.webp" width="1280" height="800" fetchpriority="high" alt="The adhd app answers questions about Princess Diana, finds restaurants near Pont de l'Alma, and shows restaurant images"></a><figcaption><span>Live app capture · 2560×1560 source</span> DeepSeek + web tools</figcaption></figure>
       </div>
     </section>
 
-    <section class="marquee" aria-label="Capabilities"><div>READ FILES <i>✦</i> SEARCH THE WEB <i>✦</i> BUILD FLOWS <i>✦</i> REMEMBER CONTEXT <i>✦</i> SCHEDULE TASKS <i>✦</i> READ FILES <i>✦</i> SEARCH THE WEB <i>✦</i></div></section>
+    <section class="marquee" aria-label="Capabilities"><div>READ FILES <i>●</i> SEARCH THE WEB <i>●</i> BUILD FLOWS <i>●</i> REMEMBER CONTEXT <i>●</i> SCHEDULE TASKS <i>●</i> READ FILES <i>●</i> SEARCH THE WEB <i>●</i></div></section>
 
     <section id="how" class="section-shell statement reveal">
       <p class="section-index">01 / How it works</p>
@@ -88,6 +89,6 @@
     </section>
   </main>
 
-  <footer class="site-footer section-shell"><a class="brand" href="#"><span class="brand-mark">a</span>adhd<span class="dot">.</span></a><p>Independent project using the DeepSeek API. Not affiliated with or endorsed by DeepSeek.</p><p>© 2026 · MIT License</p></footer>
+  <footer class="site-footer section-shell"><a class="brand" href="#"><img src="assets/adhd-mark.png" alt="" width="32" height="32"><span>adhd</span></a><p>Independent project using the DeepSeek API. Not affiliated with or endorsed by DeepSeek.</p><p>© 2026 · MIT License</p></footer>
 </body>
 </html>
