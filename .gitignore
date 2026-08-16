@@ -1,8 +1,0 @@
-node_modules
-.env
-dist
-adhd
-.DS_Store
-movie-tracker
-fix-posters.js
-public
