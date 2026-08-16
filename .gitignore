@@ -1,0 +1,42 @@
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors and local workspace settings
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.local
+
+# Dependencies and generated application builds
+node_modules/
+public/
+dist/
+build/
+.cache/
+
+# Local preview and audit output
+*.log
+lighthouse-*.html
+lighthouse-*.json
+.lighthouseci/
+
+# Temporary screen captures and recordings
+site-preview*.png
+docs-preview*.png
+capture-*.png
+capture-*.webm
+capture-*.mp4
+
+# Tool caches
+.npm/
+.bun/
+.playwright/
