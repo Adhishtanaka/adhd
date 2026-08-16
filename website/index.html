@@ -4,12 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="adhd is a local-first AI assistant powered by DeepSeek. One process, your files, your rules.">
-  <meta name="theme-color" content="#f2f0e9">
+  <meta name="theme-color" content="#4d6bfe">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <title>adhd — an AI assistant with follow-through</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="theme.css">
   <script src="script.js" defer></script>
 </head>
 <body>
@@ -17,7 +19,7 @@
   <header class="site-header">
     <a class="brand" href="#" aria-label="adhd home"><span class="brand-mark">a</span>adhd<span class="dot">.</span></a>
     <nav aria-label="Primary navigation">
-      <a href="#how">How it works</a><a href="#features">Capabilities</a><a href="#privacy">Privacy</a>
+      <a href="#how">How it works</a><a href="#features">Capabilities</a><a href="#privacy">Privacy</a><a href="docs/">Documentation</a>
     </nav>
     <a class="button button-small" href="https://github.com/Adhishtanaka/adhd">View on GitHub <span aria-hidden="true">↗</span></a>
   </header>
@@ -25,7 +27,7 @@
   <main id="main">
     <section class="hero section-shell">
       <div class="hero-copy reveal">
-        <p class="kicker"><span></span> Local-first · DeepSeek-powered</p>
+        <p class="kicker"><span></span> Local-first · built with the DeepSeek API</p>
         <h1>Your ideas move fast.<br><em>Now your assistant does too.</em></h1>
         <p class="lede">adhd is a personal AI assistant that can actually do the work—browse, write files, run commands, remember context, and automate repeat tasks. One local process. No database. No cloud middleman.</p>
         <div class="hero-actions">
@@ -37,23 +39,9 @@
         </div>
       </div>
 
-      <div class="demo-wrap reveal delay-1" aria-label="Example of adhd completing a task">
+      <div class="demo-wrap reveal delay-1" aria-label="Real recording of adhd answering a question with DeepSeek">
         <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
-        <div class="terminal-card">
-          <div class="terminal-top"><span class="term-logo">a.</span><span>adhd / deepseek-v4-flash</span><i></i></div>
-          <div class="terminal-body">
-            <div class="prompt"><span>you</span><p>Find a good dinner spot nearby and put it on my calendar.</p></div>
-            <div class="trace">
-              <p><b>✓</b><span>recall</span><small>home/location</small></p>
-              <p><b>✓</b><span>web_search</span><small>restaurants nearby</small></p>
-              <p><b>✓</b><span>browser</span><small>checking hours & reviews</small></p>
-              <p class="active"><b>↗</b><span>calendar</span><small>creating event</small></p>
-            </div>
-            <div class="answer"><span>adhd</span><p>I found a well-rated spot 12 minutes away and added dinner for 7:30 PM. Want me to invite anyone?</p></div>
-          </div>
-          <div class="composer">Ask adhd anything… <span>↑</span></div>
-        </div>
-        <div class="float-note"><b>04</b><span>tools used<br><small>with permission</small></span></div>
+        <figure class="product-shot hero-shot"><img src="assets/adhd-demo.gif" width="960" height="613" alt="The adhd app uses web search and its browser before answering a question about Lakshman Kadirgamar"><figcaption><span>Live app capture</span> DeepSeek + web tools</figcaption></figure>
       </div>
     </section>
 
@@ -65,10 +53,10 @@
     </section>
 
     <section id="features" class="section-shell features">
-      <article class="feature feature-wide reveal"><p class="num">01</p><div class="feature-icon">↯</div><h3>Act, don't just answer</h3><p>Read and write files, run commands, search the web, browse pages, and render rich results—from one chat box.</p><div class="mini-flow"><span>ask</span><i>→</i><span>think</span><i>→</i><span class="accent">do</span></div></article>
-      <article class="feature reveal delay-1"><p class="num">02</p><div class="feature-icon">◎</div><h3>Local by default</h3><p>Your configuration, memory, schedules, and API keys live on your machine—not in somebody else's database.</p><div class="local-graphic"><span>your machine</span><i></i><i></i><i></i></div></article>
-      <article class="feature dark reveal"><p class="num">03</p><div class="feature-icon">⤨</div><h3>Flows you can see</h3><p>Wire reusable workflows on a visual canvas. Branch, merge, schedule, or launch them straight from chat.</p><div class="nodes"><b>START</b><i></i><b>SEARCH</b><i></i><b>DONE</b></div></article>
-      <article class="feature feature-wide warm reveal delay-1"><p class="num">04</p><div class="deepseek-lockup"><span>DS</span> Powered by DeepSeek</div><h3>Fast reasoning. Serious context.</h3><p>DeepSeek is the ready-to-go default, with streaming tool calls and a large context window. Anthropic, Gemini, and OpenAI-compatible providers are also supported.</p><div class="meter"><span></span></div></article>
+      <article class="feature feature-wide reveal"><p class="num">01 / CHAT</p><h3>Ask. Watch it work.</h3><p>Streams the answer and a collapsible trace of every search, browser visit, file operation, and command.</p><img class="feature-shot" src="assets/app-answer.png" width="1440" height="920" loading="lazy" alt="Dark adhd chat interface showing tool calls and an answer about Lakshman Kadirgamar"></article>
+      <article class="feature reveal delay-1"><p class="num">02 / HOME</p><h3>One quiet starting point</h3><p>A focused chat interface with model switching, light and dark themes, and a visible context meter.</p><img class="feature-shot" src="assets/app-home.png" width="1440" height="920" loading="lazy" alt="adhd app empty state with a centered message composer"></article>
+      <article class="feature dark reveal"><p class="num">03 / FLOWS</p><h3>Flows you can see</h3><p>Wire reusable workflows on a visual canvas. Branch, merge, schedule, or launch them straight from chat.</p><img class="feature-shot" src="assets/app-flows.png" width="1440" height="920" loading="lazy" alt="adhd Flow studio with connected automation nodes"></article>
+      <article class="feature feature-wide warm reveal delay-1"><p class="num">04 / CONTROL</p><h3>Your machine. Your rules.</h3><p>Switch model providers, choose tool permissions, manage memory, and control exactly which local roots are visible.</p><img class="feature-shot" src="assets/app-settings.png" width="1440" height="920" loading="lazy" alt="adhd settings interface showing theme and configuration controls"></article>
     </section>
 
     <section id="privacy" class="section-shell privacy reveal">
@@ -82,10 +70,10 @@
 
     <section class="cta section-shell reveal">
       <p class="kicker"><span></span> Open source · ready to run</p><h2>Give your next idea<br>a place to <em>go.</em></h2>
-      <a class="button light" href="https://github.com/Adhishtanaka/adhd">Get adhd on GitHub <span>↗</span></a>
+      <div class="cta-actions"><a class="button light" href="https://github.com/Adhishtanaka/adhd">Get adhd on GitHub <span>↗</span></a><a class="docs-link" href="docs/">Read the documentation →</a></div>
     </section>
   </main>
 
-  <footer class="site-footer section-shell"><a class="brand" href="#"><span class="brand-mark">a</span>adhd<span class="dot">.</span></a><p>Personal AI, without the platform.</p><p>© 2026 · MIT License</p></footer>
+  <footer class="site-footer section-shell"><a class="brand" href="#"><span class="brand-mark">a</span>adhd<span class="dot">.</span></a><p>Independent project using the DeepSeek API. Not affiliated with or endorsed by DeepSeek.</p><p>© 2026 · MIT License</p></footer>
 </body>
 </html>
