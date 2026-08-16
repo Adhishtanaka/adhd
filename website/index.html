@@ -3,21 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="adhd is a local-first AI assistant powered by DeepSeek. One process, your files, your rules.">
+  <meta name="description" content="adhd is an open-source, local-first DeepSeek AI assistant that can search the web, browse, work with files, run commands, remember context, and automate tasks.">
   <meta name="theme-color" content="#4d6bfe">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <title>adhd — an AI assistant with follow-through</title>
+  <link rel="canonical" href="https://adhishtanaka.github.io/adhd/">
+  <link rel="preload" as="image" href="assets/adhd-deepseek-demo.webp" type="image/webp" fetchpriority="high">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta property="og:type" content="website"><meta property="og:site_name" content="adhd">
+  <meta property="og:title" content="adhd — Local-first AI that gets things done">
+  <meta property="og:description" content="A DeepSeek-powered personal AI assistant with web tools, local files, memory, schedules, and visual workflows.">
+  <meta property="og:url" content="https://adhishtanaka.github.io/adhd/"><meta property="og:image" content="https://adhishtanaka.github.io/adhd/assets/og-image.jpg"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="adhd finding restaurant images through a multi-turn DeepSeek conversation">
+  <meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="adhd — Local-first AI that gets things done"><meta name="twitter:description" content="DeepSeek-powered personal AI with web tools, local files, memory, schedules, and visual workflows."><meta name="twitter:image" content="https://adhishtanaka.github.io/adhd/assets/og-image.jpg">
+  <title>adhd — Local-First DeepSeek AI Assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="theme.css">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"adhd","applicationCategory":"UtilitiesApplication","operatingSystem":"macOS, Windows, Linux","description":"An open-source, local-first personal AI assistant with DeepSeek support, web browsing, file tools, memory, scheduling, and visual workflows.","url":"https://adhishtanaka.github.io/adhd/","downloadUrl":"https://github.com/Adhishtanaka/adhd","softwareVersion":"0.1.0","license":"https://opensource.org/licenses/MIT","codeRepository":"https://github.com/Adhishtanaka/adhd","programmingLanguage":"TypeScript","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}</script>
   <script src="script.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
-    <a class="brand" href="#" aria-label="adhd home"><span class="brand-mark">a</span>adhd<span class="dot">.</span></a>
+    <a class="brand" href="#"><span class="brand-mark">a</span>adhd<span class="dot">.</span></a>
     <nav aria-label="Primary navigation">
       <a href="#how">How it works</a><a href="#features">Capabilities</a><a href="#privacy">Privacy</a><a href="docs/">Documentation</a>
     </nav>
@@ -41,7 +50,7 @@
 
       <div class="demo-wrap reveal delay-1" aria-label="Real recording of adhd answering a question with DeepSeek">
         <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
-        <figure class="product-shot hero-shot"><img src="assets/adhd-demo.gif" width="960" height="613" alt="The adhd app uses web search and its browser before answering a question about Lakshman Kadirgamar"><figcaption><span>Live app capture</span> DeepSeek + web tools</figcaption></figure>
+        <figure class="product-shot hero-shot"><a href="assets/diana-04-images.png" aria-label="Open the full-resolution app screenshot"><img src="assets/adhd-deepseek-demo.webp" width="1280" height="800" fetchpriority="high" alt="The adhd app answers questions about Princess Diana, finds restaurants near Pont de l'Alma, and shows restaurant images"></a><figcaption><span>Live app capture · 1920×1200 source</span> DeepSeek + web tools</figcaption></figure>
       </div>
     </section>
 
@@ -53,10 +62,10 @@
     </section>
 
     <section id="features" class="section-shell features">
-      <article class="feature feature-wide reveal"><p class="num">01 / CHAT</p><h3>Ask. Watch it work.</h3><p>Streams the answer and a collapsible trace of every search, browser visit, file operation, and command.</p><img class="feature-shot" src="assets/app-answer.png" width="1440" height="920" loading="lazy" alt="Dark adhd chat interface showing tool calls and an answer about Lakshman Kadirgamar"></article>
-      <article class="feature reveal delay-1"><p class="num">02 / HOME</p><h3>One quiet starting point</h3><p>A focused chat interface with model switching, light and dark themes, and a visible context meter.</p><img class="feature-shot" src="assets/app-home.png" width="1440" height="920" loading="lazy" alt="adhd app empty state with a centered message composer"></article>
-      <article class="feature dark reveal"><p class="num">03 / FLOWS</p><h3>Flows you can see</h3><p>Wire reusable workflows on a visual canvas. Branch, merge, schedule, or launch them straight from chat.</p><img class="feature-shot" src="assets/app-flows.png" width="1440" height="920" loading="lazy" alt="adhd Flow studio with connected automation nodes"></article>
-      <article class="feature feature-wide warm reveal delay-1"><p class="num">04 / CONTROL</p><h3>Your machine. Your rules.</h3><p>Switch model providers, choose tool permissions, manage memory, and control exactly which local roots are visible.</p><img class="feature-shot" src="assets/app-settings.png" width="1440" height="920" loading="lazy" alt="adhd settings interface showing theme and configuration controls"></article>
+      <article class="feature feature-wide reveal"><p class="num">01 / LOCAL FILES</p><h3>Find it. Open it.</h3><p>Here, adhd locates “Attention Is All You Need” in Downloads and opens it in the computer's default PDF viewer.</p><a href="assets/pdf-local-file.png" aria-label="Open full-resolution local PDF example"><img class="feature-shot" src="assets/pdf-local-file.png" width="1920" height="1200" loading="lazy" alt="adhd finding Attention Is All You Need PDF on the local computer and opening it"></a></article>
+      <article class="feature reveal delay-1"><p class="num">02 / RESEARCH</p><h3>Context carries forward</h3><p>Ask where Diana died, then continue naturally without repeating names or places.</p><a href="assets/diana-02-where.png" aria-label="Open full-resolution follow-up example"><img class="feature-shot" src="assets/diana-02-where.png" width="1920" height="1200" loading="lazy" alt="adhd answering a contextual follow-up about where Princess Diana died"></a></article>
+      <article class="feature dark reveal"><p class="num">03 / PLACES</p><h3>From fact to next step</h3><p>Turn that location into a ranked nearby restaurant table, complete with ratings, addresses, and atmosphere.</p><a href="assets/diana-03-restaurant.png" aria-label="Open full-resolution restaurant results"><img class="feature-shot" src="assets/diana-03-restaurant.png" width="1920" height="1200" loading="lazy" alt="adhd showing restaurants near Pont de l'Alma in a structured table"></a></article>
+      <article class="feature feature-wide warm reveal delay-1"><p class="num">04 / VISUAL ANSWERS</p><h3>See it before you go.</h3><p>Ask for the first restaurant’s photos and adhd returns a browsable image gallery—not a wall of links.</p><a href="assets/diana-04-images.png" aria-label="Open full-resolution restaurant gallery"><img class="feature-shot" src="assets/diana-04-images.png" width="1920" height="1200" loading="lazy" alt="adhd showing a four-image gallery of Les Romantiques restaurant in Paris"></a></article>
     </section>
 
     <section id="privacy" class="section-shell privacy reveal">
