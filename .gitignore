@@ -40,3 +40,4 @@ capture-*.mp4
 .npm/
 .bun/
 .playwright/
+.env
