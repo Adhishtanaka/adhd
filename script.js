@@ -10,7 +10,7 @@ document.querySelector("[data-copy]")?.addEventListener("click", async (event) =
     await navigator.clipboard.writeText(button.dataset.copy);
     button.querySelector(".copy-status").textContent = "✓ copied";
   } catch {
-    button.querySelector(".copy-status").textContent = "bun install && bun start";
+    button.querySelector(".copy-status").textContent = "npm install -g adhd-cli && adhd";
   }
 });
 
