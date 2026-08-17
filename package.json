@@ -2,6 +2,10 @@
   "name": "adhd-cli",
   "version": "0.1.1",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Adhishtanaka/adhd.git"
+  },
   "type": "module",
   "module": "src/web.ts",
   "bin": {
