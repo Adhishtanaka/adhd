@@ -7,12 +7,22 @@
   "bin": {
     "adhd": "src/web.ts"
   },
+  "files": [
+    "src",
+    "public",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "scripts": {
     "start": "bun run build:web && bun run src/web.ts",
     "build:web": "vite build",
     "dev:web": "vite build --watch",
     "build": "bun run build:web && bun build --compile --outfile adhd src/web.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "prepublishOnly": "bun run build:web"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.91",
