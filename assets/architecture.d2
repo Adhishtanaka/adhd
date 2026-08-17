@@ -1,80 +1,97 @@
 direction: right
 
+classes: {
+  surface: {
+    style.fill: "#252525"
+    style.stroke: "#454545"
+    style.font-color: "#E8E8E8"
+    style.border-radius: 8
+  }
+  group: {
+    style.fill: "#1D1D1D"
+    style.stroke: "#4B4B4B"
+    style.font-color: "#F1F1F1"
+    style.border-radius: 10
+  }
+  muted: {
+    style.fill: "#222222"
+    style.stroke: "#3C3C3C"
+    style.font-color: "#AAAAAA"
+    style.border-radius: 6
+  }
+  primary: {
+    style.fill: "#245D9E"
+    style.stroke: "#3972AE"
+    style.font-color: "#FFFFFF"
+    style.border-radius: 7
+  }
+}
+
 user: You {
   shape: person
-  style.fill: "#BDF36B"
-  style.stroke: "#BDF36B"
-  style.font-color: "#111827"
+  style.fill: "#245D9E"
+  style.stroke: "#3972AE"
+  style.font-color: "#FFFFFF"
 }
 
 browser: Browser UI {
-  style.fill: "#20283A"
-  style.stroke: "#53617A"
-  style.font-color: "#F8FAFC"
-  style.border-radius: 12
+  class: surface
+  label: "Browser UI\nchat · settings · flows"
 }
 
 local: Local adhd process {
-  style.fill: "#151B28"
-  style.stroke: "#315CFF"
-  style.font-color: "#F8FAFC"
-  style.border-radius: 18
-
+  class: group
   agent: Agent loop {
-    style.fill: "#315CFF"
-    style.stroke: "#6F8FFF"
-    style.font-color: "#FFFFFF"
-    style.border-radius: 10
+    class: primary
+    label: "Agent loop\nstream · plan · retry"
   }
-
   tools: Tool runtime {
-    style.fill: "#20283A"
-    style.stroke: "#53617A"
-    style.font-color: "#F8FAFC"
-    style.border-radius: 10
+    class: surface
+    label: "Tool runtime\nexecute · approve · render"
   }
-
   state: Local state {
-    memory: Memory
-    schedules: Scheduler
-    flows: Flows
-    style.fill: "#1A2130"
-    style.stroke: "#3C475D"
-    style.font-color: "#CBD5E1"
-    style.border-radius: 10
+    class: muted
+    memory: Memory {class: muted}
+    schedules: Scheduler {class: muted}
+    flows: Flows {class: muted}
   }
-
   agent -> tools: tool calls {
-    style.stroke: "#BDF36B"
-    style.font-color: "#BDF36B"
+    style.stroke: "#5D8FC5"
+    style.font-color: "#8DB4DE"
   }
   agent <-> state: context {
-    style.stroke: "#70809D"
-    style.font-color: "#94A3B8"
+    style.stroke: "#666666"
+    style.font-color: "#999999"
   }
 }
 
 models: Model providers {
-  selected: Selected model
-  fallback: Fallback model
-  compatible: Compatible APIs
-  style.fill: "#20283A"
-  style.stroke: "#53617A"
-  style.font-color: "#F8FAFC"
-  style.border-radius: 14
+  class: group
+  selected: Selected model {class: primary}
+  fallback: Fallback model {class: muted}
+  compatible: Compatible APIs {class: muted}
 }
 
 world: Permissioned access {
-  files: Files + shell
-  web: Search + browser
-  mcp: MCP servers
-  style.fill: "#20283A"
-  style.stroke: "#53617A"
-  style.font-color: "#F8FAFC"
-  style.border-radius: 14
+  class: group
+  files: Files + shell {class: surface}
+  web: Search + browser {class: surface}
+  mcp: MCP servers {class: surface}
 }
 
-user -> browser: prompt
-browser -> local.agent: SSE stream
-local.agent <-> models: model API
-local.tools <-> world: approved actions
+user -> browser: prompt {
+  style.stroke: "#777777"
+  style.font-color: "#A8A8A8"
+}
+browser -> local.agent: SSE stream {
+  style.stroke: "#3972AE"
+  style.font-color: "#8DB4DE"
+}
+local.agent <-> models: model API {
+  style.stroke: "#3972AE"
+  style.font-color: "#8DB4DE"
+}
+local.tools <-> world: approved actions {
+  style.stroke: "#777777"
+  style.font-color: "#A8A8A8"
+}
