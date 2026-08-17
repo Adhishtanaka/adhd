@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Install and configure the adhd local-first DeepSeek AI assistant. Documentation for tools, permissions, memory, scheduling, and visual Flows.">
-  <meta name="theme-color" content="#f4f1e8"><link rel="icon" href="../assets/adhd-mark.png" type="image/png"><link rel="canonical" href="https://adhishtanaka.github.io/adhd/docs/"><meta name="robots" content="index, follow"><meta property="og:title" content="adhd Documentation"><meta property="og:description" content="Install, configure, and extend the local-first DeepSeek AI assistant."><meta property="og:url" content="https://adhishtanaka.github.io/adhd/docs/"><meta property="og:image" content="https://adhishtanaka.github.io/adhd/assets/og-image.jpg"><title>Documentation — adhd Local-First AI Assistant</title>
+  <meta name="description" content="Install and configure the adhd local-first, multi-provider AI assistant. Documentation for tools, permissions, memory, scheduling, and visual Flows.">
+  <meta name="theme-color" content="#f4f1e8"><link rel="icon" href="../favicon.svg" type="image/svg+xml"><link rel="canonical" href="https://adhishtanaka.github.io/adhd/docs/"><meta name="robots" content="index, follow"><meta property="og:title" content="adhd Documentation"><meta property="og:description" content="Install, configure, and extend the local-first, multi-provider AI assistant."><meta property="og:url" content="https://adhishtanaka.github.io/adhd/docs/"><meta property="og:image" content="https://adhishtanaka.github.io/adhd/assets/og-image.jpg"><title>Documentation — adhd Local-First AI Assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../styles.css">
@@ -12,13 +12,13 @@
 </head>
 <body class="docs-body">
   <a class="skip-link" href="#docs-main">Skip to documentation</a>
-  <header class="site-header docs-header"><a class="brand" href="../"><img src="../assets/adhd-mark.png" alt="" width="32" height="32"><span>adhd</span></a><span class="docs-label">Documentation</span><a class="button button-small" href="https://github.com/Adhishtanaka/adhd">GitHub ↗</a></header>
+  <header class="site-header docs-header"><a class="brand" href="../"><span>adhd</span></a><span class="docs-label">Documentation</span><a class="button button-small" href="https://github.com/Adhishtanaka/adhd">GitHub ↗</a></header>
   <div class="docs-layout section-shell">
     <aside class="docs-nav"><p>GET STARTED</p><a href="#overview">Overview</a><a href="#install">Installation</a><a href="#configure">Configuration</a><p>HOW IT WORKS</p><a href="#architecture">Architecture</a><a href="#tools">Tools</a><a href="#flows">Flows</a><a href="#permissions">Permissions</a><a href="#storage">Local storage</a></aside>
     <main id="docs-main" class="docs-content">
-      <section id="overview"><p class="kicker"><span></span> Documentation</p><h1>What adhd is<br>and how it runs.</h1><p class="docs-lede">adhd is a personal AI assistant that runs entirely on your machine: one process, no database, no cloud except the model API you point it at. From a single chat box it reads and writes files, runs shell commands, searches and browses the web, remembers things about you across sessions, schedules tasks, and automates anything you do repeatedly. It talks to DeepSeek, Anthropic, Gemini, or any OpenAI-compatible API.</p></section>
+      <section id="overview"><p class="kicker"><span></span> Documentation</p><h1>What adhd is<br>and how it runs.</h1><p class="docs-lede">adhd is a personal AI assistant that runs entirely on your machine: one process, no database, no cloud except the model API you choose. From a single chat box it reads and writes files, runs shell commands, searches and browses the web, remembers context, schedules tasks, and automates repeated work across multiple model providers.</p></section>
       <section id="install"><p class="section-index">01 / Installation</p><h2>Quick start</h2><ol class="steps"><li><b>Install dependencies</b><pre><code>bun install</code></pre></li><li><b>Start the app</b><pre><code>bun start</code></pre></li><li><b>Open the local UI</b><pre><code>http://127.0.0.1:8787</code></pre></li></ol><p>Add a provider key in <b>Settings → Models</b> or in a local <code>.env</code> file. You only need a key for the provider you use.</p></section>
-      <section id="configure"><p class="section-index">02 / Configuration</p><h2>Use DeepSeek</h2><pre><code>DEEPSEEK_API_KEY=sk-...
+      <section id="configure"><p class="section-index">02 / Configuration</p><h2>Choose a provider</h2><p>Configure the provider you prefer in Settings. DeepSeek compatibility is fully tested; Anthropic, Gemini, and OpenAI-compatible APIs are also supported.</p><pre><code>DEEPSEEK_API_KEY=sk-...
 SERPER_API_KEY=...        # optional web search
 MAPTILER_KEY=...          # optional map tiles
 ADHD_PORT=8787             # optional server port</code></pre><p>The default model is <code>deepseek-v4-flash</code>. A bare model ID routes to DeepSeek; prefixed IDs such as <code>anthropic:model-id</code> select another provider. Merged from <code>~/.adhd/config.json</code>, then <code>./.adhd/config.json</code> in the project (project wins):</p><pre><code>{
@@ -34,6 +34,6 @@ ADHD_PORT=8787             # optional server port</code></pre><p>The default mod
       <section id="storage"><p class="section-index">07 / Local storage</p><h2>Where data lives</h2><p>Everything lives under <code>~/.adhd/</code> — no database, no hosted account:</p><div class="mode-list"><p><b>secrets.json</b><span>API keys.</span></p><p><b>config.json</b><span>The settings shown above.</span></p><p><b>memory/</b><span>Durable memories.</span></p><p><b>schedule.json</b><span>Scheduled tasks.</span></p><p><b>flows.json</b><span>Saved Flows.</span></p><p><b>tools/&lt;name&gt;.ts</b><span>Your custom tools.</span></p><p><b>skills/&lt;name&gt;/SKILL.md</b><span>Your skills.</span></p></div><p>Model requests still go to whichever API provider you configure — that's the only network traffic that leaves your machine on your behalf.</p><a class="button" href="https://github.com/Adhishtanaka/adhd#configuration">Full README on GitHub ↗</a></section>
     </main>
   </div>
-  <footer class="site-footer section-shell"><a href="../">← Back to website</a><p>Independent project using the DeepSeek API.</p><p>MIT License</p></footer>
+  <footer class="site-footer section-shell"><a href="../">← Back to website</a><p>Local-first and multi-provider by design.</p><p>MIT License</p></footer>
 </body>
 </html>
