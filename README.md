@@ -17,12 +17,23 @@ Here are a few near you: …
 
 ## Quick start
 
+Requires [Bun](https://bun.sh) installed.
+
+```bash
+npm install -g adhd-cli
+adhd               # opens http://127.0.0.1:8787
+```
+
+Or run it once without installing: `bunx adhd-cli`.
+
+Add an API key in **Settings** (or put it in `.env` — see [Configuration](#configuration)) and start chatting. You only need a key for the provider you actually use.
+
+### From source
+
 ```bash
 bun install
 bun start          # builds the frontend, then opens http://127.0.0.1:8787
 ```
-
-Add an API key in **Settings** (or put it in `.env` — see [Configuration](#configuration)) and start chatting. You only need a key for the provider you actually use.
 
 - `bun run dev:web` — rebuild the frontend on save while developing.
 - `bun run build` — compile a standalone `./adhd` binary.
