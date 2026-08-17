@@ -15,7 +15,7 @@ document.querySelector("[data-copy]")?.addEventListener("click", async (event) =
 });
 
 const imageLinks = [...document.querySelectorAll("a[href]")].filter((link) =>
-  /\.(?:avif|gif|jpe?g|png|webp)(?:[?#].*)?$/i.test(link.getAttribute("href"))
+  /\.(?:avif|gif|jpe?g|png|svg|webp)(?:[?#].*)?$/i.test(link.getAttribute("href"))
 );
 
 if (imageLinks.length) {

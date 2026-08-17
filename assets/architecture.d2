@@ -1,0 +1,81 @@
+direction: right
+
+user: You {
+  shape: person
+  style.fill: "#BDF36B"
+  style.stroke: "#BDF36B"
+  style.font-color: "#111827"
+}
+
+browser: Browser UI {
+  style.fill: "#20283A"
+  style.stroke: "#53617A"
+  style.font-color: "#F8FAFC"
+  style.border-radius: 12
+}
+
+local: Local adhd process {
+  style.fill: "#151B28"
+  style.stroke: "#315CFF"
+  style.font-color: "#F8FAFC"
+  style.border-radius: 18
+
+  agent: Agent loop {
+    style.fill: "#315CFF"
+    style.stroke: "#6F8FFF"
+    style.font-color: "#FFFFFF"
+    style.border-radius: 10
+  }
+
+  tools: Tool runtime {
+    style.fill: "#20283A"
+    style.stroke: "#53617A"
+    style.font-color: "#F8FAFC"
+    style.border-radius: 10
+  }
+
+  state: Local state {
+    memory: Memory
+    schedules: Scheduler
+    flows: Flows
+    style.fill: "#1A2130"
+    style.stroke: "#3C475D"
+    style.font-color: "#CBD5E1"
+    style.border-radius: 10
+  }
+
+  agent -> tools: tool calls {
+    style.stroke: "#BDF36B"
+    style.font-color: "#BDF36B"
+  }
+  agent <-> state: context {
+    style.stroke: "#70809D"
+    style.font-color: "#94A3B8"
+  }
+}
+
+models: Model providers {
+  deepseek: DeepSeek
+  anthropic: Anthropic
+  gemini: Gemini
+  compatible: OpenAI-compatible
+  style.fill: "#20283A"
+  style.stroke: "#53617A"
+  style.font-color: "#F8FAFC"
+  style.border-radius: 14
+}
+
+world: Permissioned access {
+  files: Files + shell
+  web: Search + browser
+  mcp: MCP servers
+  style.fill: "#20283A"
+  style.stroke: "#53617A"
+  style.font-color: "#F8FAFC"
+  style.border-radius: 14
+}
+
+user -> browser: prompt
+browser -> local.agent: SSE stream
+local.agent <-> models: model API
+local.tools <-> world: approved actions
