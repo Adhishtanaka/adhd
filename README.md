@@ -4,6 +4,8 @@ A personal AI assistant that runs entirely on your machine — one process, no d
 
 It talks to DeepSeek, Anthropic, Gemini, or any OpenAI-compatible API, and serves a ChatGPT-style UI at `http://127.0.0.1:8787`. Your API keys never leave that address.
 
+![adhd researching the web and presenting a structured visual answer](docs/adhd-deepseek-demo.webp)
+
 ```
 ▌ you  find nearby restaurants
 
