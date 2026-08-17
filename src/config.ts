@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from "node:fs";
-import { join, sep } from "node:path";
+import { join, sep, dirname, relative } from "node:path";
 import { homedir } from "node:os";
 import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -348,15 +348,7 @@ export function allowedRoots(): string[] {
   return (roots?.length ? roots : [homedir()]).map(expandTilde);
 }
 
-// True only if `p` resolves (via realpath, defeating `../` and symlink escape)
-// to a location inside an allowed root and isn't a sensitive file.
-export function isUnderRoots(p: string): boolean {
-  let real: string;
-  try {
-    real = realpathSync(expandTilde(p));
-  } catch {
-    return false;
-  }
+function realUnderRoots(real: string): boolean {
   if (SENSITIVE.test(real)) return false;
   return allowedRoots().some((root) => {
     try {
@@ -366,6 +358,35 @@ export function isUnderRoots(p: string): boolean {
       return false;
     }
   });
+}
+
+// True only if `p` resolves (via realpath, defeating `../` and symlink escape)
+// to a location inside an allowed root and isn't a sensitive file.
+export function isUnderRoots(p: string): boolean {
+  try {
+    return realUnderRoots(realpathSync(expandTilde(p)));
+  } catch {
+    return false;
+  }
+}
+
+// Like isUnderRoots, but for a path that doesn't exist yet (a file about to be
+// written). realpath needs something real to resolve, so walk up to the
+// nearest existing ancestor (still defeating a symlinked parent dir), realpath
+// THAT, then re-attach the not-yet-created tail.
+export function isUnderRootsForWrite(p: string): boolean {
+  const expanded = expandTilde(p);
+  let dir = dirname(expanded);
+  while (!existsSync(dir)) {
+    const parent = dirname(dir);
+    if (parent === dir) return false; // walked off the filesystem root
+    dir = parent;
+  }
+  try {
+    return realUnderRoots(join(realpathSync(dir), relative(dir, expanded)));
+  } catch {
+    return false;
+  }
 }
 
 export const setLocalRoots = (localRoots: string[]): void => patchConfig({ localRoots });

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { builtinTools } from "../src/tools.js";
 
@@ -9,13 +9,21 @@ import { builtinTools } from "../src/tools.js";
 const grep = (builtinTools().grep as any).execute;
 
 test("grep finds a matching line with file:line, and reports misses", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "grep-"));
+  // Under ~/.adhd, not the OS tmpdir — grep is confined to the allowed roots
+  // (home by default), and /var/folders/... isn't one of them.
+  const scratch = join(homedir(), ".adhd");
+  mkdirSync(scratch, { recursive: true });
+  const dir = mkdtempSync(join(scratch, "grep-"));
   writeFileSync(join(dir, "a.txt"), "hello world\nsecond line\n");
 
-  const hit = await grep({ pattern: "second", path: dir });
-  expect(hit).toContain("a.txt");
-  expect(hit).toContain("second line");
+  try {
+    const hit = await grep({ pattern: "second", path: dir });
+    expect(hit).toContain("a.txt");
+    expect(hit).toContain("second line");
 
-  const miss = await grep({ pattern: "nonexistent-xyzzy", path: dir });
-  expect(miss).toBe("no matches");
+    const miss = await grep({ pattern: "nonexistent-xyzzy", path: dir });
+    expect(miss).toBe("no matches");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

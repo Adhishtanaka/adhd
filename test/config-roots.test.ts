@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
-import { isUnderRoots, allowedRoots } from "../src/config.js";
+import { isUnderRoots, isUnderRootsForWrite, allowedRoots } from "../src/config.js";
 
 const dir = join(homedir(), ".adhd");
 
@@ -26,4 +26,11 @@ test("rejects sensitive files even under an allowed root", () => {
   writeFileSync(pem, "x");
   expect(isUnderRoots(pem)).toBe(false); // .pem is denylisted
   rmSync(pem);
+});
+
+test("write variant accepts a not-yet-created path under home, rejects escape", () => {
+  const nested = join(dir, "roots-test-nested", "new-file.txt"); // parent dir doesn't exist yet
+  expect(isUnderRootsForWrite(nested)).toBe(true);
+  expect(isUnderRootsForWrite("/etc/roots-test-new.txt")).toBe(false);
+  expect(isUnderRootsForWrite(join(homedir(), "..", "roots-test-new.txt"))).toBe(false); // escapes home
 });

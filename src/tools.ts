@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { tool, type Tool } from "ai";
 import { z } from "zod";
-import { ROOTS, allowedRoots, isUnderRoots, allowedCommands, permissionMode } from "./config.js";
+import { ROOTS, allowedRoots, isUnderRoots, isUnderRootsForWrite, allowedCommands, permissionMode } from "./config.js";
 import { isBadDomain, domainOf } from "./failcache.js";
 import { withDeadline } from "./jobs.js";
 
@@ -194,12 +194,14 @@ export function builtinTools(): Record<string, Tool> {
     read_file: tool({
       description: "Read a UTF-8 text file and return its contents.",
       inputSchema: z.object({ path: z.string() }),
-      execute: async ({ path }) => cap(readFileSync(path, "utf8")),
+      execute: async ({ path }) =>
+        isUnderRoots(path) ? cap(readFileSync(path, "utf8")) : `"${path}" is outside the allowed folders.`,
     }),
     write_file: tool({
       description: "Write text to a file, creating parent dirs. Overwrites.",
       inputSchema: z.object({ path: z.string(), content: z.string() }),
       execute: async ({ path, content }) => {
+        if (!isUnderRootsForWrite(path)) return `"${path}" is outside the allowed folders.`;
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, content);
         return `wrote ${content.length} bytes to ${path}`;
@@ -208,10 +210,12 @@ export function builtinTools(): Record<string, Tool> {
     list_dir: tool({
       description: "List entries in a directory (name and type).",
       inputSchema: z.object({ path: z.string().default(".") }),
-      execute: async ({ path }) =>
-        readdirSync(path, { withFileTypes: true })
+      execute: async ({ path }) => {
+        if (!isUnderRoots(path)) return `"${path}" is outside the allowed folders.`;
+        return readdirSync(path, { withFileTypes: true })
           .map((d) => (d.isDirectory() ? `${d.name}/` : d.name))
-          .join("\n"),
+          .join("\n");
+      },
     }),
     grep: tool({
       description: "Search files under a directory for a regex; returns matching lines with file:line.",
@@ -220,6 +224,7 @@ export function builtinTools(): Record<string, Tool> {
         path: z.string().default("."),
       }),
       execute: async ({ pattern, path }) => {
+        if (!isUnderRoots(path)) return `"${path}" is outside the allowed folders.`;
         // Fast path: ripgrep. It's native, multithreaded, memory-maps files, and
         // skips binaries/.gitignore itself — orders of magnitude faster than
         // reading every file in JS. rg exits 1 on "no matches", which isn't an error.
@@ -265,6 +270,7 @@ export function builtinTools(): Record<string, Tool> {
       description: "Find files by glob pattern (e.g. '**/*.md', 'src/**/*.ts', '*.pdf'). Returns matching paths under cwd.",
       inputSchema: z.object({ pattern: z.string(), cwd: z.string().default(".") }),
       execute: async ({ pattern, cwd }) => {
+        if (!isUnderRoots(cwd)) return `"${cwd}" is outside the allowed folders.`;
         // Bun.Glob is native + cross-platform but has no ignore option, so we
         // drop node_modules/.git here — otherwise they'd fill the 500 cap and
         // bury the real matches. ponytail: string filter, not a pruned walk;

@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { formatSerper, keepRealImages } from "../src/tools.js";
+import { formatSerper, keepRealImages, builtinTools } from "../src/tools.js";
+
+const run = (t: any, input: any) => t.execute(input, {} as any);
 
 test("search formats knowledge graph, answer, and organic with URLs", () => {
   const out = formatSerper("search", {
@@ -50,4 +52,15 @@ test("keepRealImages keeps only urls that serve an image content-type", async ()
   } finally {
     globalThis.fetch = orig;
   }
+});
+
+test("file tools refuse paths outside the allowed roots", async () => {
+  const t = builtinTools();
+  expect(await run(t.read_file, { path: "/etc/passwd" })).toContain("outside the allowed folders");
+  expect(await run(t.write_file, { path: "/etc/roots-test.txt", content: "x" })).toContain(
+    "outside the allowed folders",
+  );
+  expect(await run(t.list_dir, { path: "/etc" })).toContain("outside the allowed folders");
+  expect(await run(t.grep, { pattern: "root", path: "/etc" })).toContain("outside the allowed folders");
+  expect(await run(t.glob, { pattern: "*", cwd: "/etc" })).toContain("outside the allowed folders");
 });
