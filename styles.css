@@ -80,16 +80,6 @@ h1 em, h2 em { font-family: var(--serif); font-weight: 400; color: var(--blue); 
 .showcase-intro > p:last-child { color: var(--muted); font-size: 13px; line-height: 1.7; }
 .product-showcase .product-shot { cursor: zoom-in; }
 
-.architecture { margin-bottom: 120px; padding: 58px; overflow: hidden; border: 1px solid #252c3a; border-radius: 24px; background: var(--night); color: white; }
-.architecture-head { display: grid; grid-template-columns: 1fr 420px; gap: 60px; align-items: end; margin-bottom: 44px; }
-.architecture-head h2 { margin: 24px 0 0; font-size: clamp(42px, 5vw, 66px); line-height: .95; letter-spacing: -.055em; }
-.architecture-head h2 em { font-family: var(--serif); font-weight: 400; color: var(--acid); }
-.architecture-head > p { margin: 0; color: #aeb7c7; font-size: 13px; line-height: 1.75; }
-.architecture .section-index { color: var(--acid); }
-.architecture-visual { position: relative; display: block; overflow: hidden; border: 1px solid #354057; border-radius: 16px; background: #1e1e2e; cursor: zoom-in; }
-.architecture-visual > span { position: absolute; z-index: 2; top: 14px; left: 14px; padding: 7px 10px; border: 1px solid #ffffff24; border-radius: 999px; background: rgba(12,16,24,.8); color: var(--acid); font: 8px var(--mono); letter-spacing: .08em; text-transform: uppercase; backdrop-filter: blur(8px); }
-.architecture-visual img { display: block; width: 100%; height: auto; transition: transform .35s; }
-.architecture-visual:hover img { transform: scale(1.012); }
 
 .features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding-bottom: 130px; }
 .feature { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 250px; padding: 28px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: 0 12px 34px rgba(35,46,73,.055); }
@@ -153,7 +143,6 @@ body.modal-open { overflow: hidden; }
   .statement, .privacy { grid-template-columns: 1fr; gap: 35px; }
   .product-showcase { grid-template-columns: 1fr; gap: 34px; }
   .showcase-intro { max-width: 620px; }
-  .architecture-head { grid-template-columns: 1fr; gap: 24px; }
   .features { grid-template-columns: minmax(0,1fr); }
   .feature, .feature:nth-child(n) { grid-column: auto; }
   .cta-actions { position: relative; right: auto; bottom: auto; align-items: flex-start; margin-top: 50px; }
@@ -177,8 +166,6 @@ body.modal-open { overflow: hidden; }
   .trust-row { flex-direction: column; gap: 7px; }
   .statement { padding-block: 90px 72px; }
   .product-showcase { padding-bottom: 90px; }
-  .architecture { margin-bottom: 90px; padding: 32px 20px 20px; border-radius: 18px; }
-  .architecture-head { margin-bottom: 28px; }
   .feature { padding: 22px; border-radius: 14px; }
   .features { padding-bottom: 95px; }
   .privacy { padding-block: 85px 100px; }
