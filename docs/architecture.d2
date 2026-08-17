@@ -24,6 +24,13 @@ chrome: headless Chrome {
   shape: rectangle
 }
 
+models: Model providers {
+  shape: rectangle
+  selected: "Selected model"
+  fallback: "Fallback model(s)"
+  compatible: "DeepSeek · Anthropic\nGemini · OpenAI-compatible"
+}
+
 client.ui -> server.web: "POST /chat"
 client.flow -> server.web: "POST /flows"
 server.web -> client.ui: "SSE stream"
@@ -38,3 +45,4 @@ server.agent -> server.flows
 
 server.mcp -> mcp_servers: "stdio"
 server.browser -> chrome: "stdio"
+server.agent -> models: "model API, with fallback"
