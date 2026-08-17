@@ -1,0 +1,77 @@
+vars: {
+  d2-config: {
+    theme-id: 200
+    pad: 48
+    theme-overrides: {
+      N7: "#1D1D1D"
+    }
+  }
+}
+
+direction: right
+
+classes: {
+  surface: {
+    style.fill: "#252525"
+    style.stroke: "#454545"
+    style.font-color: "#E8E8E8"
+    style.border-radius: 8
+  }
+  muted: {
+    style.fill: "#222222"
+    style.stroke: "#3C3C3C"
+    style.font-color: "#AAAAAA"
+    style.border-radius: 6
+  }
+  primary: {
+    style.fill: "#245D9E"
+    style.stroke: "#3972AE"
+    style.font-color: "#FFFFFF"
+    style.border-radius: 999
+  }
+}
+
+start: Start {
+  class: primary
+  shape: oval
+}
+
+prompt: Prompt {
+  class: surface
+  label: "Prompt\none model call, no tools"
+}
+
+cond: If {
+  class: surface
+  label: "If\nyes / no question"
+  shape: diamond
+}
+
+tool: Tool {
+  class: surface
+  label: "Tool\nruns exactly one tool"
+}
+
+switch: Switch {
+  class: surface
+  label: "Switch\nnamed cases + else"
+  shape: diamond
+}
+
+merge: Merge {
+  class: muted
+  label: "Merge\nwaits for every branch"
+}
+
+end: End {
+  class: primary
+  shape: oval
+}
+
+start -> prompt: {style.stroke: "#777777"; style.font-color: "#A8A8A8"}
+prompt -> cond: {style.stroke: "#777777"; style.font-color: "#A8A8A8"}
+cond -> tool: yes {style.stroke: "#5D8FC5"; style.font-color: "#8DB4DE"}
+cond -> switch: no {style.stroke: "#5D8FC5"; style.font-color: "#8DB4DE"}
+tool -> merge: {style.stroke: "#777777"; style.font-color: "#A8A8A8"}
+switch -> merge: each case {style.stroke: "#5D8FC5"; style.font-color: "#8DB4DE"}
+merge -> end: {style.stroke: "#777777"; style.font-color: "#A8A8A8"}
