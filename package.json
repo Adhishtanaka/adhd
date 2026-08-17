@@ -1,6 +1,6 @@
 {
   "name": "adhd-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "module": "src/web.ts",
