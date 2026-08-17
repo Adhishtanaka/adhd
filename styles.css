@@ -74,12 +74,6 @@ h1 em, h2 em { font-family: var(--serif); font-weight: 400; color: var(--blue); 
 .statement h2, .privacy h2 { margin: 0 0 26px; font-size: clamp(44px, 5vw, 66px); line-height: 1; letter-spacing: -.055em; }
 .statement > div p { max-width: 820px; margin: 0; color: #4e596b; font-family: var(--serif); font-size: clamp(24px, 2.5vw, 32px); line-height: 1.48; }
 
-.product-showcase { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 58px; align-items: center; padding-bottom: 120px; }
-.showcase-intro h2 { margin: 28px 0 18px; font-size: clamp(40px, 4vw, 58px); line-height: .98; letter-spacing: -.055em; }
-.showcase-intro h2 em { font-family: var(--serif); font-weight: 400; color: var(--blue); }
-.showcase-intro > p:last-child { color: var(--muted); font-size: 13px; line-height: 1.7; }
-.product-showcase .product-shot { cursor: zoom-in; }
-
 
 .features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding-bottom: 130px; }
 .feature { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 250px; padding: 28px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: 0 12px 34px rgba(35,46,73,.055); }
@@ -141,8 +135,6 @@ body.modal-open { overflow: hidden; }
   .hero { grid-template-columns: minmax(0,1fr); gap: 64px; min-height: 0; padding: 58px; }
   .hero-copy { max-width: 680px; }
   .statement, .privacy { grid-template-columns: 1fr; gap: 35px; }
-  .product-showcase { grid-template-columns: 1fr; gap: 34px; }
-  .showcase-intro { max-width: 620px; }
   .features { grid-template-columns: minmax(0,1fr); }
   .feature, .feature:nth-child(n) { grid-column: auto; }
   .cta-actions { position: relative; right: auto; bottom: auto; align-items: flex-start; margin-top: 50px; }
@@ -165,7 +157,6 @@ body.modal-open { overflow: hidden; }
   .hero-actions { align-items: flex-start; flex-direction: column; }
   .trust-row { flex-direction: column; gap: 7px; }
   .statement { padding-block: 90px 72px; }
-  .product-showcase { padding-bottom: 90px; }
   .feature { padding: 22px; border-radius: 14px; }
   .features { padding-bottom: 95px; }
   .privacy { padding-block: 85px 100px; }
