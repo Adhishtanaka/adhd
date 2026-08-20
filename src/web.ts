@@ -164,12 +164,12 @@ function expire(token: string, note: string): void {
   broadcast("info", { message: note });
 }
 
-setBashConfirm(({ command, explain, allowKey }) => {
+setBashConfirm(({ command, explain, allowKey, dangerReason }) => {
   const token = crypto.randomUUID();
   const answered = new Promise<boolean>((resolve) => {
     pending.set(token, (v) => resolve(!!v));
     if (allowKey) pendingAllowKey.set(token, allowKey);
-    broadcast("confirm", { token, command, explain, allowKey });
+    broadcast("confirm", { token, command, explain, allowKey, dangerReason });
   });
   // Unanswered means declined — the same default tools.ts uses when headless.
   return orAfter(answered, APPROVAL_TIMEOUT, false, () =>

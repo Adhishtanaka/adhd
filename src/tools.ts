@@ -10,6 +10,7 @@ import { z } from "zod";
 import { ROOTS, allowedRoots, isUnderRoots, isUnderRootsForWrite, allowedCommands, permissionMode } from "./config.js";
 import { isBadDomain, domainOf } from "./failcache.js";
 import { withDeadline } from "./jobs.js";
+import { guardUntrustedContent } from "./security.js";
 
 // How long a tool may hold the turn open before it finishes in the background.
 // Shell gets longer than network: a command the user just approved is usually
@@ -35,7 +36,7 @@ const execFileAsync = promisify(execFile);
 // user can judge it without reading shell. `allowKey` is non-null only when the
 // command is safe to blanket-approve (see allowKeyFor).
 // Wired by the agent at startup. Default: deny (safe when running headless).
-export type ConfirmReq = { command: string; explain?: string; allowKey?: string | null };
+export type ConfirmReq = { command: string; explain?: string; allowKey?: string | null; dangerReason?: string };
 export type Confirm = (req: ConfirmReq) => Promise<boolean>;
 let confirmBash: Confirm = async () => false;
 export function setBashConfirm(fn: Confirm) {
@@ -79,7 +80,26 @@ export function orAfter<T>(p: Promise<T>, ms: number, fallback: T, onTimeout: ()
 // so anything but a single plain command gets one-time approval only — null here
 // means the UI shows no "always allow" button at all.
 const SHELL_OPS = /[;&|<>`$(){}\n]/;
+
+const DANGEROUS_COMMANDS: Array<[RegExp, string]> = [
+  [/\brm\s+(?:[^\n]*\s)?-(?:[a-z]*r[a-z]*f?|[a-z]*f[a-z]*r)\b/i, "recursively deletes files"],
+  [/\b(?:mkfs(?:\.\w+)?|fdisk|parted|diskutil\s+erase|format\s+[a-z]:)\b/i, "can erase or reformat a disk"],
+  [/\bdd\b[^\n]*(?:\bof=\/dev\/|\bif=\/dev\/(?:zero|random))/i, "writes raw data to a device"],
+  [/\b(?:shutdown|reboot|halt|poweroff)\b/i, "can stop or restart the machine"],
+  [/\bchmod\s+(?:-R\s+)?777\b/i, "grants broad filesystem permissions"],
+  [/\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f)/i, "can permanently discard Git work"],
+  [/\b(?:drop|truncate)\s+(?:database|schema|table)\b/i, "can permanently delete database data"],
+  [/(?:curl|wget)\b[^\n|;]*(?:\||;|&&)\s*(?:sudo\s+)?(?:sh|bash|zsh|pwsh|powershell)\b/i, "downloads and immediately executes remote code"],
+  [/\b(?:del|erase)\s+\/(?:s|q)\b/i, "recursively deletes files"],
+  [/\bRemove-Item\b[^\n]*(?:-Recurse|-Force)/i, "recursively or forcibly deletes files"],
+];
+
+export function dangerousCommandReason(command: string): string | undefined {
+  return DANGEROUS_COMMANDS.find(([pattern]) => pattern.test(command))?.[1];
+}
+
 export function allowKeyFor(runner: string, command: string): string | null {
+  if (dangerousCommandReason(command)) return null;
   if (SHELL_OPS.test(command)) return null;
   const first = command.trim().split(/\s+/)[0] ?? "";
   return /^[\w./-]+$/.test(first) ? `${runner}:${first}` : null;
@@ -89,11 +109,13 @@ export function allowKeyFor(runner: string, command: string): string | null {
 // blanket-approved, otherwise ask.
 async function approve(runner: string, command: string, explain?: string): Promise<boolean> {
   const mode = permissionMode();
-  if (mode === "auto" || preApproved()) return true;
+  const dangerReason = dangerousCommandReason(command);
+  if (!dangerReason && (mode === "auto" || preApproved())) return true;
   const allowKey = allowKeyFor(runner, command);
   // "ask" ignores the always-allow list — the whole point of that mode is that
   // nothing runs unseen, including things you approved on a calmer day. The
   // card also drops its "always allow" button, so a click can't re-arm it.
+  if (dangerReason) return confirmBash({ command, explain, allowKey: null, dangerReason });
   if (mode === "ask") return confirmBash({ command, explain, allowKey: null });
   if (allowKey && allowedCommands().includes(allowKey)) return true;
   return confirmBash({ command, explain, allowKey });
@@ -338,12 +360,15 @@ export function builtinTools(): Record<string, Tool> {
         explain: EXPLAIN,
       }),
       execute: async ({ code, explain }) => {
-        // allowKey null: a script is arbitrary code, so there is no program name
-        // worth blanket-approving — run_script always asks. The one exception is a
-        // flow step, whose script the user wrote and whose run they just started.
+        // A script is arbitrary code, so neither full access nor Flow
+        // pre-approval may bypass this one-time warning.
         if (
-          !preApproved() &&
-          !(await confirmBash({ command: `bun run <script>\n${code}`, explain, allowKey: null }))
+          !(await confirmBash({
+            command: `bun run <script>\n${code}`,
+            explain,
+            allowKey: null,
+            dangerReason: "executes arbitrary code with access to your files and network",
+          }))
         )
           return "user denied script";
         const file = join(tmpdir(), `adhd-${Date.now()}.ts`);
@@ -396,7 +421,7 @@ export function builtinTools(): Record<string, Tool> {
             const ok = await Promise.all(data.images.map((im: any) => isRealImage(im.imageUrl)));
             data.images = data.images.filter((_: any, i: number) => ok[i]);
           }
-          return cap(formatSerper(type, data));
+          return guardUntrustedContent(`web_search:${type}`, cap(formatSerper(type, data)));
         } catch (e) {
           return `serper ${type} failed: ${(e as Error).message}`;
         }

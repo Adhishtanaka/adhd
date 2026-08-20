@@ -1062,8 +1062,11 @@ function notify(title, body) {
 // user actually decides on; the raw command sits below it, collapsed behind a
 // toggle so it's available but not the headline.
 function confirmCard(d) {
-  const c = el("frame space-y-2 approve");
-  c.append(el("eyebrow", "run this?"));
+  const c = el(`frame space-y-2 approve${d.dangerReason ? " approve-danger" : ""}`);
+  c.append(el("eyebrow", d.dangerReason ? "dangerous command" : "run this?"));
+  if (d.dangerReason) {
+    c.append(el("approve-danger-alert", `Warning: this ${d.dangerReason}. Full access cannot bypass this confirmation.`));
+  }
   if (d.explain) c.append(el("text-sm text-paper", d.explain));
   // The command is shown OUTRIGHT, never behind a toggle or a tooltip. You can't
   // approve what you can't see, and a hidden default means people click Allow
@@ -1085,7 +1088,7 @@ function confirmCard(d) {
     return b;
   };
   const btns = el("flex flex-wrap gap-2 pt-1");
-  btns.append(btn("bg-paper text-base rounded-full px-3.5 py-1 text-xs cursor-pointer font-medium", "Allow once", () => answer(true, false)));
+  btns.append(btn(d.dangerReason ? "approve-danger-button" : "bg-paper text-base rounded-full px-3.5 py-1 text-xs cursor-pointer font-medium", d.dangerReason ? "I understand, run once" : "Allow once", () => answer(true, false)));
   // allowKey is null for anything the server won't blanket-approve (shell
   // operators, run_script) — no "always" button at all in that case.
   if (d.allowKey)

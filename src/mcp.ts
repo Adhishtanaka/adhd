@@ -4,6 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { dynamicTool, jsonSchema, type Tool } from "ai";
 import { cap, confirmAction } from "./tools.js";
+import { guardUntrustedContent } from "./security.js";
 import { loadConfig, setMcpServers, disabledTools, HOME_ROOT } from "./config.js";
 
 // MCP (modelcontextprotocol.io) servers, so any tool someone else already wrote
@@ -116,7 +117,8 @@ async function connect(name: string, spec: McpServer): Promise<Record<string, To
         );
         if (!ok) return "User declined this tool call.";
         try {
-          return cap(contentToText(await client.callTool({ name: t.name, arguments: (args ?? {}) as any })));
+          const content = cap(contentToText(await client.callTool({ name: t.name, arguments: (args ?? {}) as any })));
+          return guardUntrustedContent(`mcp:${full}`, content);
         } catch (e) {
           return `MCP call failed: ${(e as Error).message}`;
         }

@@ -6,6 +6,7 @@ import { tool, type Tool } from "ai";
 import { z } from "zod";
 import { contentToText } from "./mcp.js";
 import { cap, cleanMarkdown, confirmAction, keepRealImages, MAX_OUT } from "./tools.js";
+import { guardUntrustedContent } from "./security.js";
 import { rankChunks, extractImages } from "./extract.js";
 import { recordFailure } from "./failcache.js";
 import { withDeadline } from "./jobs.js";
@@ -272,7 +273,7 @@ function browserTool(): Tool {
           recordFailure(a.url!, "empty page");
           return `could not read ${a.url} — the page came back empty. Try a different URL.`;
         }
-        return formatRead(page, a.query);
+        return guardUntrustedContent(a.url ?? "browser", await formatRead(page, a.query));
       }
       if (a.action === "eval") return cap(unwrapScript(out));
       if (a.action === "screenshot") {
