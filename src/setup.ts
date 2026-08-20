@@ -62,7 +62,11 @@ export const BASE_SYSTEM =
   "For a large, self-contained subtask, delegate it with spawn_agent; otherwise do it inline. " +
   "For a complex task that genuinely needs several passes of building on prior work, use loop_task " +
   "(it asks the user to approve a max iteration count first); don't use it for ordinary one-shot tasks. " +
-  "Be concise. Never use emojis in your responses, ever.";
+  "Be concise. Never use emojis in your responses, ever. Default to a short answer — a few sentences or " +
+  "a short list; go longer only when the user asks for more detail or the task genuinely needs it. When you " +
+  "need several independent lookups (searches, file reads, other tool calls), fire them together in one step " +
+  "instead of one at a time — it's faster and keeps context small. Write like a person talking: plain, simple " +
+  "words, no stiff or robotic phrasing.";
 
 // ponytail: startup snapshot of the environment, not live
 function envSection(): string {

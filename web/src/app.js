@@ -950,16 +950,17 @@ function connect() {
   on("ask", (d) => askCard(d));
   on("notify", (d) => notify(d.title, d.body));
   on("done", (d) => {
-    // When a content card already carried the answer, the card IS the whole
-    // answer — drop any trailing prose entirely rather than keeping an intro line.
+    // A content card (Table/Metric/etc) is meant to carry the whole answer, so the
+    // final d.html (which restates it as markdown) is skipped to avoid duplication.
+    // But the model doesn't always obey "write no more text" — whatever it already
+    // streamed stays on screen instead of being deleted, since deleting it silently
+    // drops real content the user was reading.
     if (d.html && !contentCardThisTurn) {
       turnAssistants.forEach((n) => n.remove());
       const ans = el("md leading-relaxed text-paper/95");
       ans.innerHTML = d.html;
       enrich(ans);
       if (ans.textContent.trim()) add(block("adhd", ans));
-    } else if (d.html && contentCardThisTurn) {
-      turnAssistants.forEach((n) => n.remove());
     }
     // Float sources, then follow-ups, to the very bottom (below the answer).
     floatBottom.sort((a, b) => (a.kind === "sources" ? -1 : 1) - (b.kind === "sources" ? -1 : 1));
