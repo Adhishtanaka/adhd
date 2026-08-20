@@ -18,16 +18,13 @@
     <script type="module" src="/src/main.js"></script>
   </head>
   <body class="bg-base text-paper font-sans min-h-screen flex">
-    <div id="app-shell" class="flex-1 flex flex-col min-w-0">
-      <header class="flex items-center gap-3 px-5 h-14 border-b border-line shrink-0">
+    <div id="app-shell" class="flex-1 flex min-w-0">
+      <header class="app-sidebar flex items-center gap-3 px-5 h-14 border-b border-line shrink-0">
         <div class="brand-lockup" aria-label="adhd home">
           <span class="font-display font-semibold text-xl">adhd<span class="brand-dot">.</span></span>
         </div>
-        <span class="header-rule" aria-hidden="true"></span>
-        <span class="eyebrow hidden sm:inline">thinking, made visible</span>
         <span id="conn" class="hidden font-mono text-xs text-dim">reconnecting…</span>
-        <div class="ml-auto flex items-center gap-3 font-mono text-xs text-dim">
-          <select id="model-select" aria-label="Model" class="bg-transparent text-paper/70 outline-none cursor-pointer hover:text-paper transition-colors"></select>
+        <div class="sidebar-actions ml-auto flex items-center gap-3 font-mono text-xs text-dim">
           <!-- Icon buttons: title + aria-label carry the meaning the text used to.
                stroke="currentColor" so they inherit the hover colour and both themes. -->
           <button id="new-chat" class="navbtn" title="New chat" aria-label="New chat">
@@ -42,7 +39,12 @@
         </div>
       </header>
 
-      <div id="chat-area" class="flex-1 flex flex-col min-w-0 home">
+      <div class="chat-workspace flex-1 flex flex-col min-w-0">
+        <div class="model-dock">
+          <span>Model</span>
+          <select id="model-select" aria-label="Model" class="bg-transparent text-paper/70 outline-none cursor-pointer hover:text-paper transition-colors"></select>
+        </div>
+        <div id="chat-area" class="flex-1 flex flex-col min-w-0 home">
         <main id="log" class="flex-1 overflow-y-auto px-5 py-8 space-y-5 max-w-3xl w-full mx-auto"></main>
 
         <div id="home-hero" class="max-w-3xl w-full mx-auto">
@@ -99,6 +101,7 @@
             </div>
           </div>
         </footer>
+        </div>
       </div>
     </div>
 
@@ -109,17 +112,18 @@
       <span id="connection-message">Connection lost. Messages are paused.</span>
     </div>
 
-    <section id="panel" class="hidden fixed inset-0 bg-base overflow-y-auto z-30">
-      <div class="settings-page-head flex items-center gap-3 px-5 h-16 border-b border-line sticky top-0 bg-base">
+    <section id="panel" class="hidden fixed inset-0 bg-base z-30">
+      <div class="settings-page-head">
         <button class="settings-back" onclick="closeSettings()" aria-label="Back to chat">←</button>
         <span class="settings-brand">adhd<span>.</span></span>
-        <span class="header-rule" aria-hidden="true"></span>
-        <span class="font-display font-semibold">Settings</span>
+        <span class="section-label">Settings</span>
       </div>
-      <div id="settings" class="settings text-sm"></div>
+      <div class="settings-scroll">
+        <div id="settings" class="settings text-sm"></div>
+      </div>
     </section>
 
     <!-- Flows: full-screen like #panel. flow.js mounts the React Flow canvas here. -->
-    <section id="flows-panel" class="hidden fixed inset-0 bg-base z-30 flex flex-col"></section>
+    <section id="flows-panel" class="hidden fixed inset-0 bg-base z-30 flex"></section>
   </body>
 </html>

@@ -613,8 +613,8 @@ window.openFlows = () => {
   panel.classList.remove("hidden");
   if (!root) {
     const header = document.createElement("div");
-    header.className = "flow-page-head flex items-center gap-3 px-5 h-16 border-b border-line shrink-0";
-    header.innerHTML = `<button class="flow-back" aria-label="Back to chat">←</button><span class="flow-brand">adhd<span>.</span></span><span class="header-rule"></span><div><span class="font-display font-semibold">Flows</span><span class="flow-mode">Studio</span></div>`;
+    header.className = "flow-page-head";
+    header.innerHTML = `<button class="flow-back" aria-label="Back to chat">←</button><span class="flow-brand">adhd<span>.</span></span><span class="section-label">Flows</span><span class="flow-mode">Studio</span>`;
     header.firstChild.onclick = () => window.closeFlows();
     const body = document.createElement("div");
     body.className = "flex-1 flex min-h-0";
