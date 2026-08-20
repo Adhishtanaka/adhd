@@ -33,8 +33,14 @@ const connEl = document.getElementById("conn");
 const nokey = document.getElementById("nokey");
 const statusEl = document.getElementById("status");
 const statusText = document.getElementById("status-text");
+const connectionSnackbar = document.getElementById("connection-snackbar");
+const connectionMessage = document.getElementById("connection-message");
 
 let busy = false;
+let hasKey = false;
+let serverConnected = false;
+let connectedOnce = false;
+let connectionTimer = null;
 let maptilerKey = ""; // filled from /state; empty → maps fall back to OSM tiles
 let turnAssistants = [];
 let shownSources = new Set(); // source URLs already cited this turn — dedupe repeats
@@ -903,8 +909,14 @@ function setStatus(text) {
 // ---- SSE ----
 function connect() {
   const es = new EventSource("/events");
-  es.addEventListener("open", () => connEl.classList.add("hidden"));
-  es.addEventListener("error", () => connEl.classList.remove("hidden"));
+  es.addEventListener("open", () => {
+    connEl.classList.add("hidden");
+    setConnection(true);
+  });
+  es.addEventListener("error", () => {
+    connEl.classList.remove("hidden");
+    setConnection(false);
+  });
   const on = (name, fn) => es.addEventListener(name, (e) => fn(JSON.parse(e.data)));
 
   on("text", (d) => {
@@ -984,13 +996,55 @@ function connect() {
     if (document.hidden) notify("adhd", "Answer ready");
   });
 }
+function showConnection(message, ok = false, dismiss = false) {
+  clearTimeout(connectionTimer);
+  connectionMessage.textContent = message;
+  connectionSnackbar.classList.remove("hidden", "is-ok");
+  if (ok) connectionSnackbar.classList.add("is-ok");
+  if (dismiss) connectionTimer = setTimeout(() => connectionSnackbar.classList.add("hidden"), 2200);
+}
+function updateComposerAvailability() {
+  const reachable = navigator.onLine && serverConnected;
+  msg.disabled = !reachable;
+  sendBtn.disabled = !hasKey || !reachable;
+  composer.classList.toggle("is-offline", !reachable);
+  msg.placeholder = !navigator.onLine
+    ? "You’re offline"
+    : !serverConnected
+      ? "Reconnecting…"
+      : busy
+        ? "Queue a message…"
+        : "Ask adhd anything…";
+}
+function setConnection(connected) {
+  const wasConnected = serverConnected;
+  serverConnected = connected;
+  updateComposerAvailability();
+  if (!connected) {
+    showConnection(navigator.onLine ? "Connection to adhd lost. Messages are paused." : "You’re offline. Messages are paused.");
+  } else if (connectedOnce && !wasConnected) {
+    showConnection("Back online", true, true);
+  } else {
+    connectionSnackbar.classList.add("hidden");
+  }
+  if (connected) connectedOnce = true;
+}
+window.addEventListener("offline", () => {
+  updateComposerAvailability();
+  showConnection("You’re offline. Messages are paused.");
+});
+window.addEventListener("online", () => {
+  updateComposerAvailability();
+  if (serverConnected) showConnection("Back online", true, true);
+  else showConnection("Internet restored. Reconnecting…", true);
+});
 function setBusy(v) {
   busy = v;
   ctxCompact.disabled = v; // the server 409s a mid-turn compact; don't offer it
   // The composer stays live while the agent works — sending now queues rather
   // than being swallowed, so the button must stay clickable and the placeholder
   // has to say what pressing it will actually do.
-  msg.placeholder = v ? "Queue a message…" : "Ask adhd anything…";
+  updateComposerAvailability();
   if (v) setStatus("thinking");
   else {
     statusEl.classList.add("hidden");
@@ -1134,12 +1188,27 @@ function renderQueue() {
 }
 
 async function send(text) {
-  userBubble(text);
-  const r = await post("/chat", { message: text });
+  let r;
+  try {
+    r = await post("/chat", { message: text });
+  } catch {
+    serverConnected = false;
+    updateComposerAvailability();
+    showConnection("Connection to adhd lost. Your message was not sent.");
+    msg.value = text;
+    return;
+  }
   if (r.status === 400) {
     nokey.classList.remove("hidden");
     openSettings();
+    return;
   }
+  if (r.status === 409) {
+    queued.unshift(text);
+    renderQueue();
+    return;
+  }
+  userBubble(text);
 }
 
 // Drain one message per idle transition: /chat flips busy back on immediately,
@@ -1371,6 +1440,31 @@ function renderTodos(items) {
   }
 }
 
+let transcriptRestored = false;
+function restoreTranscript(entries) {
+  if (transcriptRestored) return;
+  transcriptRestored = true;
+  for (const entry of entries || []) {
+    if (entry.type === "user") {
+      add(el("usermsg whitespace-pre-wrap text-paper", entry.text));
+    } else if (entry.type === "assistant") {
+      const ans = el("md leading-relaxed text-paper/95");
+      ans.innerHTML = entry.html;
+      enrich(ans);
+      if (ans.textContent.trim()) add(block("adhd", ans));
+    } else if (entry.type === "ui" && entry.spec) {
+      shownSpecs = new Set();
+      shownSources = new Set();
+      renderSpec(entry.spec);
+    }
+  }
+  shownSpecs = new Set();
+  shownSources = new Set();
+  setHome(!(entries || []).length);
+  pinned = true;
+  stickBottom();
+}
+
 async function refreshState() {
   try {
     const s = await (await fetch("/state")).json();
@@ -1392,8 +1486,10 @@ async function refreshState() {
       modelEl.append(o);
     }
     modelEl.value = s.model;
-    nokey.classList.toggle("hidden", s.hasKey);
-    sendBtn.disabled = !s.hasKey;
+    hasKey = !!s.hasKey;
+    nokey.classList.toggle("hidden", hasKey);
+    updateComposerAvailability();
+    restoreTranscript(s.transcript);
     renderContext(s.context);
     renderTodos(s.todos);
   } catch {}

@@ -5,7 +5,7 @@ import { marked } from "marked";
 import { buildAgent } from "./setup.js";
 import { setBashConfirm, setAskUser, orAfter } from "./tools.js";
 import { setSubagentSink } from "./subagent.js";
-import { setRenderSink, carriesAnswer } from "./render.js";
+import { setRenderSink, carriesAnswer, type Spec } from "./render.js";
 import { sanitize } from "./sanitize.js";
 import { listFailures, clearFailures, removeDomain } from "./failcache.js";
 import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, mcpServers, setMcpServers, setCustomBaseURL, loadConfig, capabilities, setCapabilities, permissionMode, setPermissionMode, disabledTools, setDisabledTools, splitSpec, PROVIDER_KEY, CAPABILITIES, type Capabilities, type KeyName } from "./config.js";

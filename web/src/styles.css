@@ -47,6 +47,11 @@
 .navbtn:hover { color: rgb(var(--c-text)); background: rgb(var(--c-surface)); }
 .navbtn:focus-visible { outline: 2px solid rgb(var(--c-accent)); outline-offset: 1px; }
 .navbtn svg { width: 17px; height: 17px; }
+.connection-snackbar { position: fixed; left: 50%; top: 76px; z-index: 60; transform: translateX(-50%); display: flex; align-items: center; gap: .65rem; width: max-content; max-width: calc(100vw - 2rem); padding: .65rem .85rem; border: 1px solid rgb(var(--c-border)); border-radius: 7px; background: rgb(var(--c-surface)); color: rgb(var(--c-text)); box-shadow: 0 12px 32px rgb(0 0 0 / .22); font-size: 12px; animation: snackbar-in .2s ease-out; }
+.connection-snackbar.hidden { display: none; }
+.connection-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: rgb(var(--c-negative)); box-shadow: 0 0 0 3px rgb(var(--c-negative) / .14); }
+.connection-snackbar.is-ok .connection-dot { background: rgb(var(--c-positive)); box-shadow: 0 0 0 3px rgb(var(--c-positive) / .14); }
+@keyframes snackbar-in { from { opacity: 0; transform: translate(-50%, -8px); } }
 /* Task list: one row per step, the active one called out. */
 .todo-row { display: flex; align-items: baseline; gap: .5rem; }
 .todo-row[data-s="done"] { color: rgb(var(--c-text-dim)); text-decoration: line-through; }
@@ -201,6 +206,8 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
 #model-select { max-width: 12rem; text-overflow: ellipsis; }
 #composer > div { min-height: 56px; border-radius: 18px; background: rgb(var(--c-surface) / .94); border-color: rgb(var(--c-border)); box-shadow: 0 8px 28px rgb(0 0 0 / .12), inset 0 1px rgb(255 255 255 / .045); backdrop-filter: blur(18px); transition: border-color .18s, box-shadow .18s, transform .18s; }
 #composer > div:focus-within { border-color: rgb(var(--c-accent) / .68); box-shadow: 0 14px 38px rgb(0 0 0 / .2), 0 0 0 3px rgb(var(--c-accent) / .09); transform: translateY(-1px); }
+#composer.is-offline > div { opacity: .58; box-shadow: none; }
+#composer.is-offline textarea { cursor: not-allowed; }
 #send { width: 38px; height: 38px; border-radius: 12px; background: rgb(var(--c-user-message)); color: rgb(255 255 255); box-shadow: 0 4px 12px rgb(var(--c-user-message) / .24); transition: opacity .15s, transform .15s, box-shadow .15s; }
 #send:not(:disabled):hover { opacity: 1; transform: translateY(-1px); box-shadow: 0 6px 16px rgb(var(--c-user-message) / .4); }
 #send:not(:disabled):active { transform: translateY(0) scale(.96); }
