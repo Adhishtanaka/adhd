@@ -51,8 +51,13 @@ type Session = {
   agent: Agent;
   clients: Set<ReadableStreamDefaultController>;
   todos: TodoItem[];
+  transcript: TranscriptEntry[];
   seen: number;
 };
+type TranscriptEntry =
+  | { type: "user"; text: string }
+  | { type: "assistant"; html: string }
+  | { type: "ui"; spec: Spec; carries: boolean };
 const sessions = new Map<string, Session>();
 const SID_COOKIE = "adhd_sid";
 // A browser that never comes back should not pin its history forever.
@@ -97,7 +102,11 @@ function broadcastAll(event: string, data: unknown) {
 }
 
 function makeSession(id: string): Session {
-  return { id, agent: built.newAgent(), clients: new Set(), todos: [], seen: Date.now() };
+  return { id, agent: built.newAgent(), clients: new Set(), todos: [], transcript: [], seen: Date.now() };
+}
+function rememberTranscript(s: Session, entry: TranscriptEntry) {
+  s.transcript.push(entry);
+  if (s.transcript.length > 200) s.transcript.splice(0, s.transcript.length - 200);
 }
 systemSession = makeSession("system"); // kept out of `sessions`, so no cookie can name it
 /** The session named by the request's cookie, created on first sight. */
@@ -214,7 +223,9 @@ setRenderSink((spec) => {
   // the model was being told one thing and the transcript deciding another (a Map
   // counted as media client-side and as a finished answer server-side), so the
   // prose was suppressed at the source and kept at the sink, or vice versa.
-  broadcast("render_ui", { spec, carries: carriesAnswer(spec) });
+  const carries = carriesAnswer(spec);
+  if (active) rememberTranscript(active, { type: "ui", spec: structuredClone(spec), carries });
+  broadcast("render_ui", { spec, carries });
 });
 
 
@@ -239,6 +250,7 @@ async function runTurn(message: string, s: Session) {
   loadTodos(s.todos); // its checklist, not whoever ran last
   broadcastAll("busy", { busy: true });
   let assistant = "";
+  rememberTranscript(s, { type: "user", text: message });
   try {
     await s.agent.send(message, (e) => {
       switch (e.type) {
@@ -272,7 +284,9 @@ async function runTurn(message: string, s: Session) {
           break;
       }
     });
-    broadcast("done", { html: sanitize(await marked.parse(assistant)) });
+    const html = sanitize(await marked.parse(assistant));
+    if (html.trim()) rememberTranscript(s, { type: "assistant", html });
+    broadcast("done", { html });
   } catch (err) {
     broadcast("error", { message: (err as Error)?.message ?? String(err) });
     broadcast("done", { html: "" });
@@ -880,6 +894,7 @@ Bun.serve({
           const s = sessionFor(req);
           s.agent.reset();
           s.todos = [];
+          s.transcript = [];
           if (active === s) resetTodos();
           broadcast("context", s.agent.stats(), s);
           return noContent();
@@ -1033,6 +1048,7 @@ Bun.serve({
           // reloading tab whatever another session is mid-way through.
           context: sessionFor(req).agent.stats(),
           todos: sessionFor(req).todos,
+          transcript: sessionFor(req).transcript,
           maptilerKey: process.env.MAPTILER_KEY ?? "",
         });
     }

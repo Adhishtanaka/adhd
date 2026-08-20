@@ -104,6 +104,11 @@
 
     <dialog id="lightbox"></dialog>
 
+    <div id="connection-snackbar" class="connection-snackbar hidden" role="status" aria-live="polite">
+      <span class="connection-dot" aria-hidden="true"></span>
+      <span id="connection-message">Connection lost. Messages are paused.</span>
+    </div>
+
     <section id="panel" class="hidden fixed inset-0 bg-base overflow-y-auto z-30">
       <div class="settings-page-head flex items-center gap-3 px-5 h-16 border-b border-line sticky top-0 bg-base">
         <button class="settings-back" onclick="closeSettings()" aria-label="Back to chat">←</button>
