@@ -130,7 +130,6 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
 .settings-back { width: 32px; height: 32px; display: grid; place-items: center; color: rgb(var(--c-text-dim)); border: 1px solid rgb(var(--c-border)); border-radius: 7px; transition: color .15s, background .15s, transform .15s; }
 .settings-back:hover { color: rgb(var(--c-text)); background: rgb(var(--c-surface)); transform: translateX(-2px); }
 .settings-brand { font-family: var(--font-display); font-size: 1.15rem; font-weight: 700; }
-.section-label { margin-top: .25rem; color: rgb(var(--c-text-dim)); font: 500 9px/1 var(--font-mono); text-transform: uppercase; letter-spacing: .1em; writing-mode: vertical-rl; }
 .settings { width: min(1180px, 100%); margin: 0 auto; padding: 2rem clamp(1rem, 3vw, 2.5rem) 4rem; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: clamp(2rem, 5vw, 5rem); align-items: start; }
 .settings-tabs { position: sticky; top: 6rem; z-index: 3; display: flex; flex-direction: column; gap: .2rem; padding: 0; overflow: visible; background: transparent; }
 .settings-tabs::-webkit-scrollbar { display: none; }
@@ -204,7 +203,7 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
 #app-shell > header { width: 76px; height: 100vh; flex: 0 0 76px; padding: 1rem 0; flex-direction: column; border-right: 1px solid rgb(var(--c-border)); border-bottom: 0; background: rgb(var(--c-bg) / .9); backdrop-filter: blur(18px) saturate(1.2); position: relative; z-index: 10; }
 .brand-lockup { display: flex; align-items: center; gap: .7rem; }
 .brand-lockup .font-display { font-size: 1.05rem; line-height: 1; }
-.brand-dot, .settings-brand span, .flow-brand span, .home-wordmark span { color: rgb(var(--c-accent)); }
+.brand-dot, .settings-brand span, .flow-brand span { color: rgb(var(--c-accent)); }
 .header-rule { width: 1px; height: 18px; background: rgb(var(--c-border)); }
 .sidebar-actions { flex-direction: column; margin: auto 0 0; gap: .55rem; }
 .app-sidebar .navbtn { width: 40px; height: 40px; border-radius: 7px; }
@@ -229,14 +228,46 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
 #chat-area.home > #log { flex: 0 0 auto; overflow: visible; padding-top: 0; padding-bottom: 0; }
 #home-hero { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 0 1.25rem 1.15rem; position: relative; z-index: 1; }
 #home-hero h1 { color: rgb(var(--c-text)); font-family: var(--font-display); font-size: 1.75rem; font-weight: 600; line-height: 1.2; letter-spacing: 0; }
-.home-wordmark { margin-bottom: 1.15rem; font-family: var(--font-display); font-size: 1.35rem; font-weight: 700; }
 #chat-area.home footer { position: relative; z-index: 1; width: 100%; }
 #chat-area.home #composer { padding-top: 0; }
 #chat-area:not(.home) > footer { border-top: 1px solid rgb(var(--c-border) / .75); background: linear-gradient(to bottom, rgb(var(--c-bg) / .78), rgb(var(--c-bg))); backdrop-filter: blur(18px); }
 
+/* Desktop navigation stays out of the workspace until the left edge is used.
+   focus-within gives keyboard users the same reveal behavior as hover. */
+@media (hover: hover) and (min-width: 701px) {
+  .app-sidebar, .settings-page-head, .flow-page-head {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 40;
+    transform: translateX(calc(-100% + 8px));
+    box-shadow: none;
+    transition: transform .2s cubic-bezier(.2, .75, .25, 1) .12s, box-shadow .2s ease;
+  }
+  .app-sidebar::after, .settings-page-head::after, .flow-page-head::after {
+    content: "";
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: 8px;
+    background: linear-gradient(to bottom, transparent calc(50% - 24px), rgb(var(--c-accent) / .42) calc(50% - 24px), rgb(var(--c-accent) / .42) calc(50% + 24px), transparent calc(50% + 24px));
+    transition: opacity .15s;
+  }
+  .app-sidebar:hover, .app-sidebar:focus-within,
+  .settings-page-head:hover, .settings-page-head:focus-within,
+  .flow-page-head:hover, .flow-page-head:focus-within {
+    transform: translateX(0);
+    box-shadow: 10px 0 30px rgb(0 0 0 / .2);
+    transition-delay: 0s;
+  }
+  .app-sidebar:hover::after, .app-sidebar:focus-within::after,
+  .settings-page-head:hover::after, .settings-page-head:focus-within::after,
+  .flow-page-head:hover::after, .flow-page-head:focus-within::after { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar, .settings-page-head, .flow-page-head { transition: none; }
+}
+
 /* ---- Flow studio: an operational canvas, distinct from the chat. ---- */
 .flow-brand { font-family: var(--font-display); font-size: 1.15rem; font-weight: 700; }
-.flow-mode { margin-top: auto; padding: .35rem .25rem; border: 1px solid rgb(var(--c-border)); border-radius: 4px; color: rgb(var(--c-text-dim)); font: 8px/1 var(--font-mono); text-transform: uppercase; letter-spacing: .08em; writing-mode: vertical-rl; }
 .flow-back { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid rgb(var(--c-border)); border-radius: 7px; color: rgb(var(--c-text-dim)); transition: .15s ease; }
 .flow-back:hover { color: rgb(var(--c-text)); background: rgb(var(--c-surface)); transform: translateX(-2px); }
 .flow-workspace { background: rgb(var(--c-surface-2)); }
@@ -326,7 +357,5 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
   #model-select { display: block; max-width: 8rem; }
   #panel:not(.hidden), #flows-panel:not(.hidden) { display: flex; flex-direction: column; }
   .settings-page-head, .flow-page-head { width: 100%; height: 58px; flex: 0 0 58px; flex-direction: row; justify-content: flex-start; gap: .75rem; padding: 0 .85rem; border-right: 0; border-bottom: 1px solid rgb(var(--c-border)); }
-  .section-label { margin: 0; writing-mode: horizontal-tb; }
-  .flow-mode { margin: 0 0 0 auto; padding: .25rem .4rem; writing-mode: horizontal-tb; }
   .settings-scroll { width: 100%; }
 }
