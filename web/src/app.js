@@ -1251,6 +1251,11 @@ window.openSettings = () => {
 window.closeSettings = () => {
   panel.classList.add("hidden");
 };
+window.openMcpSettings = () => {
+  window.closeFlows?.();
+  sessionStorage.setItem("adhd-settings-tab", "access");
+  window.openSettings();
+};
 document.getElementById("open-settings").onclick = openSettings;
 
 // ---- new chat ----

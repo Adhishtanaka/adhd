@@ -1043,6 +1043,15 @@ Bun.serve({
           // directly (the agent-control ones aren't usable without a model turn)
           toolNames: built.toolNames.filter((t) => !["spawn_agent", "loop_task", "run_flow", "render_ui", "ask_user"].includes(t)),
           toolArgs: built.toolArgs, // arg fields per tool, read off each tool's schema
+          mcpConnections: Object.entries(mcpServers()).map(([name, spec]) => {
+            const catalog = mcpCatalog();
+            return {
+              name,
+              connected: Object.prototype.hasOwnProperty.call(catalog, name),
+              trust: spec.trust ?? "ask",
+              tools: (catalog[name] ?? []).map((t) => t.full).filter((t) => built.toolNames.includes(t)),
+            };
+          }),
           // Both seed the page on load, so they must describe the CALLER's
           // conversation — reading the live todo module here would hand a
           // reloading tab whatever another session is mid-way through.

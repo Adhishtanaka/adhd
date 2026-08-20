@@ -280,6 +280,15 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
 .flow-list-item:hover { background: rgb(var(--c-surface) / .6); transform: translateX(2px); }
 .flow-list-item { border-radius: 6px !important; }
 .flow-list-item.active::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 2px 2px 0; background: rgb(var(--c-accent)); }
+.flow-connections { border-top: 1px solid rgb(var(--c-border)); }
+.flow-manage-mcp { color: rgb(var(--c-accent)); font: 500 9px/1 var(--font-mono); }
+.flow-manage-mcp:hover { color: rgb(var(--c-text)); }
+.flow-connection-row { min-height: 32px; display: flex; align-items: center; gap: .45rem; padding: .4rem .5rem; border-radius: 5px; color: rgb(var(--c-text)); font-size: 11px; }
+.flow-connection-row:hover { background: rgb(var(--c-surface) / .65); }
+.flow-connection-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: rgb(var(--c-text-dim)); box-shadow: 0 0 0 3px rgb(var(--c-text-dim) / .1); }
+.flow-connection-dot.is-connected { background: rgb(var(--c-positive)); box-shadow: 0 0 0 3px rgb(var(--c-positive) / .12); }
+.flow-empty-mcp { width: 100%; padding: .55rem .5rem; border: 1px dashed rgb(var(--c-border)); border-radius: 5px; color: rgb(var(--c-text-dim)); font-size: 11px; text-align: left; transition: color .15s, border-color .15s; }
+.flow-empty-mcp:hover { color: rgb(var(--c-text)); border-color: rgb(var(--c-accent)); }
 .flow-toolbar { background: rgb(var(--c-bg) / .96); overflow-x: auto; scrollbar-width: none; }
 .flow-toolbar::-webkit-scrollbar { display: none; }
 .flow-title-input { width: 220px; flex: 0 0 auto; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: .45rem .65rem; color: rgb(var(--c-text)); font-family: var(--font-display); font-size: 14px; font-weight: 600; outline: none; }

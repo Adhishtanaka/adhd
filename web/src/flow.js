@@ -148,7 +148,7 @@ const nodeTypes = { start: StartNode, prompt: PromptNode, if: IfNode, switch: Sw
 const field = "w-full bg-raise border border-line rounded-lg px-2 py-1.5 text-xs text-paper outline-none focus:border-dim";
 const btn = "px-2.5 py-1.5 rounded-lg border border-line text-xs hover:border-dim transition disabled:opacity-40";
 
-function Inspector({ node, onChange, onDelete, toolNames, toolArgs, models }) {
+function Inspector({ node, onChange, onDelete, toolNames, toolArgs, models, mcpConnections }) {
   if (!node)
     return h(
       "div",
@@ -236,12 +236,22 @@ function Inspector({ node, onChange, onDelete, toolNames, toolArgs, models }) {
     // The fields come from the tool's own schema (served by /state), so there's
     // nothing to guess — required ones are marked, enums become dropdowns.
     const spec = toolArgs[d.tool] || [];
+    const mcpNames = new Set(mcpConnections.flatMap((connection) => connection.tools || []));
+    const builtIn = toolNames.filter((name) => !mcpNames.has(name));
     rows.push(
       h(
         "select",
         { key: "s", className: field, value: d.tool || "", onChange: (e) => set({ tool: e.target.value, args: {} }) },
         h("option", { value: "" }, "pick a tool…"),
-        toolNames.map((t) => h("option", { key: t, value: t }, t)),
+        builtIn.length
+          ? h("optgroup", { label: "Built-in" }, builtIn.map((t) => h("option", { key: t, value: t }, t)))
+          : null,
+        mcpConnections.map((connection) => {
+          const names = toolNames.filter((name) => (connection.tools || []).includes(name));
+          return names.length
+            ? h("optgroup", { key: connection.name, label: `MCP · ${connection.name}` }, names.map((t) => h("option", { key: t, value: t }, t)))
+            : null;
+        }),
       ),
       spec.length
         ? h("div", { key: "al", className: "text-[10px] text-dim" }, "{{prev}} inserts the previous node's output; {{key}} inserts any earlier node's.")
@@ -353,6 +363,7 @@ function FlowsPage() {
   const [selected, setSelected] = useState(null);
   const [toolNames, setToolNames] = useState([]);
   const [toolArgs, setToolArgs] = useState({});
+  const [mcpConnections, setMcpConnections] = useState([]);
   const [models, setModels] = useState([]);
   const [entries, setEntries] = useState([]);
   const [runState, setRunState] = useState("idle"); // idle | running | paused
@@ -370,6 +381,7 @@ function FlowsPage() {
         setToolNames(s.toolNames || []);
         setToolArgs(s.toolArgs || {});
         setModels(s.models || []);
+        setMcpConnections(s.mcpConnections || []);
       });
 
     const push = (e) => setEntries((l) => [...l.slice(-199), e]);
@@ -515,6 +527,21 @@ function FlowsPage() {
           f.name,
         ),
       ),
+      h("div", { className: "flow-connections mt-auto pt-4" },
+        h("div", { className: "flex items-center justify-between px-2 mb-2" },
+          h("span", { className: "eyebrow" }, "MCP connections"),
+          h("button", { className: "flow-manage-mcp", onClick: () => window.openMcpSettings?.() }, "Manage"),
+        ),
+        mcpConnections.length
+          ? mcpConnections.map((connection) =>
+              h("div", { key: connection.name, className: "flow-connection-row" },
+                h("span", { className: `flow-connection-dot ${connection.connected ? "is-connected" : ""}` }),
+                h("span", { className: "truncate flex-1" }, connection.name),
+                h("span", { className: "font-mono text-[9px] text-dim" }, connection.connected ? `${connection.tools.length} tools` : "restart"),
+              ),
+            )
+          : h("button", { className: "flow-empty-mcp", onClick: () => window.openMcpSettings?.() }, "Connect an MCP server"),
+      ),
     ),
     // canvas + toolbar + log
     h(
@@ -595,6 +622,7 @@ function FlowsPage() {
         toolNames,
         toolArgs,
         models,
+        mcpConnections,
         onChange: (data) => setNodes((ns) => ns.map((n) => (n.id === selected ? { ...n, data } : n))),
         onDelete: () => {
           setNodes((ns) => ns.filter((n) => n.id !== selected));

@@ -14,8 +14,29 @@ import {
   type FlowEvent,
 } from "../src/flows.js";
 import { builtinTools, confirmAction, setBashConfirm } from "../src/tools.js";
-import { tool } from "ai";
+import { dynamicTool, jsonSchema, tool } from "ai";
 import { z } from "zod";
+
+test("tool arg specs expose dynamic MCP JSON Schema fields", () => {
+  const mcp = dynamicTool({
+    description: "search notes",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Words to find" },
+        limit: { type: "integer", enum: [1, 5, 10] },
+      },
+      required: ["query"],
+    }),
+    execute: async () => "ok",
+  });
+  expect(toolArgSpecs({ notes_search: mcp })).toEqual({
+    notes_search: [
+      { key: "query", required: true, description: "Words to find", options: undefined },
+      { key: "limit", required: false, description: undefined, options: ["1", "5", "10"] },
+    ],
+  });
+});
 
 // Executors are stubbed — traversal is what's under test, no model involved.
 function stub(over: Partial<FlowExec> = {}): FlowExec & { seen: string[] } {

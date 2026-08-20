@@ -271,26 +271,40 @@ export function expandHome(v: string): string {
 export type ArgSpec = { key: string; required: boolean; description?: string; options?: string[] };
 
 /**
- * The argument list for each tool, read off its zod schema, so the canvas can
+ * The argument list for each tool, read off its Zod or JSON Schema, so the canvas can
  * show real fields instead of asking the user to guess key names.
  */
 export function toolArgSpecs(tools: Record<string, Tool>): Record<string, ArgSpec[]> {
   const out: Record<string, ArgSpec[]> = {};
   for (const [name, t] of Object.entries(tools)) {
-    const shape = (t.inputSchema as any)?._def?.shape?.();
-    if (!shape) continue;
-    out[name] = Object.entries(shape).map(([key, f]: [string, any]) => {
-      // unwrap optional/default/nullable to reach the real type
-      let inner = f;
-      for (let i = 0; i < 5 && inner?._def?.innerType; i++) inner = inner._def.innerType;
-      const values = inner?._def?.values ?? inner?._def?.options;
-      return {
-        key,
-        required: typeof f.isOptional === "function" ? !f.isOptional() : true,
-        description: f.description ?? inner?.description,
-        options: Array.isArray(values) ? values.map(String) : undefined,
-      };
-    });
+    const schema = t.inputSchema as any;
+    const shape = schema?._def?.shape?.();
+    if (shape) {
+      out[name] = Object.entries(shape).map(([key, f]: [string, any]) => {
+        // unwrap optional/default/nullable to reach the real type
+        let inner = f;
+        for (let i = 0; i < 5 && inner?._def?.innerType; i++) inner = inner._def.innerType;
+        const values = inner?._def?.values ?? inner?._def?.options;
+        return {
+          key,
+          required: typeof f.isOptional === "function" ? !f.isOptional() : true,
+          description: f.description ?? inner?.description,
+          options: Array.isArray(values) ? values.map(String) : undefined,
+        };
+      });
+      continue;
+    }
+
+    const json = schema?.jsonSchema;
+    const properties = json?.properties;
+    if (json?.type !== "object" || !properties || typeof properties !== "object") continue;
+    const required = new Set(Array.isArray(json.required) ? json.required : []);
+    out[name] = Object.entries(properties).map(([key, field]: [string, any]) => ({
+      key,
+      required: required.has(key),
+      description: typeof field?.description === "string" ? field.description : undefined,
+      options: Array.isArray(field?.enum) ? field.enum.map(String) : undefined,
+    }));
   }
   return out;
 }
