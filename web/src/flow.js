@@ -498,7 +498,7 @@ function FlowsPage() {
     // saved flows
     h(
       "aside",
-      { className: "flow-library w-56 shrink-0 border-r border-line p-3 flex flex-col gap-1 overflow-y-auto" },
+      { className: "flow-library w-60 shrink-0 border-r border-line p-3 flex flex-col gap-1 overflow-y-auto" },
       h("div", { className: "px-2 pt-2 pb-3" },
         h("div", { className: "eyebrow" }, "Workspace"),
         h("div", { className: "text-sm font-display font-semibold mt-1" }, "Your flows"),
@@ -525,13 +525,13 @@ function FlowsPage() {
         { className: "flow-toolbar flex items-center gap-2 px-3 py-2.5 border-b border-line" },
         h("input", { "aria-label": "Flow name", className: "flow-title-input", value: name, onChange: (e) => setName(e.target.value) }),
         h("div", { className: "flow-add-group flex items-center gap-1" },
-          h("span", { className: "eyebrow px-2" }, "Add step"),
-          h("button", { className: btn, onClick: () => add("prompt") }, "+ Prompt"),
-          h("button", { className: btn, onClick: () => add("if") }, "+ If"),
-          h("button", { className: btn, onClick: () => add("switch") }, "+ Switch"),
-          h("button", { className: btn, onClick: () => add("tool") }, "+ Tool"),
-          h("button", { className: btn, onClick: () => add("merge") }, "+ Merge"),
-          h("button", { className: btn, onClick: () => add("end") }, "+ End"),
+          h("span", { className: "eyebrow px-2" }, "Insert"),
+          h("button", { className: btn, onClick: () => add("prompt") }, "Prompt"),
+          h("button", { className: btn, onClick: () => add("if") }, "If"),
+          h("button", { className: btn, onClick: () => add("switch") }, "Switch"),
+          h("button", { className: btn, onClick: () => add("tool") }, "Tool"),
+          h("button", { className: btn, onClick: () => add("merge") }, "Merge"),
+          h("button", { className: btn, onClick: () => add("end") }, "End"),
         ),
         h(
           "div",
@@ -585,7 +585,7 @@ function FlowsPage() {
     // inspector
     h(
       "aside",
-      { className: `flow-inspector ${sel ? "active" : ""} w-80 shrink-0 border-l border-line overflow-y-auto` },
+      { className: `flow-inspector ${sel ? "active" : ""} w-96 shrink-0 border-l border-line overflow-y-auto` },
       h("div", { className: "flow-inspector-head sticky top-0 px-5 py-4 border-b border-line" },
         h("div", { className: "eyebrow" }, sel ? "Selected step" : "Inspector"),
         h("div", { className: "font-display font-semibold mt-1" }, sel ? (sel.data?.key || sel.type) : "How it works"),
@@ -614,7 +614,7 @@ window.openFlows = () => {
   if (!root) {
     const header = document.createElement("div");
     header.className = "flow-page-head flex items-center gap-3 px-5 h-16 border-b border-line shrink-0";
-    header.innerHTML = `<button class="flow-back" aria-label="Back to chat">←</button><div><span class="font-display font-bold">Flow studio</span><span class="hidden sm:inline text-dim text-xs ml-2">Build repeatable automations visually</span></div>`;
+    header.innerHTML = `<button class="flow-back" aria-label="Back to chat">←</button><span class="flow-brand">adhd<span>.</span></span><span class="header-rule"></span><div><span class="font-display font-semibold">Flows</span><span class="flow-mode">Studio</span></div>`;
     header.firstChild.onclick = () => window.closeFlows();
     const body = document.createElement("div");
     body.className = "flex-1 flex min-h-0";

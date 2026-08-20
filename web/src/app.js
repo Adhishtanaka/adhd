@@ -11,6 +11,7 @@ import mermaid from "mermaid";
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
+import { normalizeMermaid } from "./mermaid.js";
 
 // Leaflet normally sniffs its marker images out of the stylesheet's url(); the
 // bundler rewrites those to hashed/inlined URLs, which defeats the sniff. Hand
@@ -501,9 +502,10 @@ function referencesEl(items) {
 function mermaidEl(code) {
   const holder = el("frame overflow-x-auto");
   const id = "mmd-" + Math.random().toString(36).slice(2);
+  const source = normalizeMermaid(code);
   if (window.mermaid)
     mermaid
-      .render(id, String(code))
+      .render(id, source)
       .then(({ svg }) => (holder.innerHTML = svg))
       .catch(() => (holder.textContent = code));
   else holder.textContent = code;

@@ -19,9 +19,9 @@ export default {
         iris: "rgb(var(--c-info) / <alpha-value>)",
       },
       fontFamily: {
-        display: ["Space Grotesk", "ui-sans-serif", "system-ui"],
-        sans: ["Inter", "ui-sans-serif", "system-ui"],
-        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        display: ["Instrument Sans", "ui-sans-serif", "system-ui"],
+        sans: ["Instrument Sans", "ui-sans-serif", "system-ui"],
+        mono: ["DM Mono", "ui-monospace", "monospace"],
       },
     },
   },

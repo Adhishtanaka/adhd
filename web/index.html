@@ -6,7 +6,7 @@
     <title>adhd</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script>
       // Apply saved theme before first paint (no flash of wrong theme).
       // "system" (default) leaves data-theme unset so the media query decides.
@@ -20,8 +20,11 @@
   <body class="bg-base text-paper font-sans min-h-screen flex">
     <div id="app-shell" class="flex-1 flex flex-col min-w-0">
       <header class="flex items-center gap-3 px-5 h-14 border-b border-line shrink-0">
-        <span class="font-display font-bold text-lg tracking-tight">adhd<span class="text-dim">.</span></span>
-        <span class="eyebrow hidden sm:inline">everyday assistant</span>
+        <div class="brand-lockup" aria-label="adhd home">
+          <span class="font-display font-semibold text-xl">adhd<span class="brand-dot">.</span></span>
+        </div>
+        <span class="header-rule" aria-hidden="true"></span>
+        <span class="eyebrow hidden sm:inline">thinking, made visible</span>
         <span id="conn" class="hidden font-mono text-xs text-dim">reconnecting…</span>
         <div class="ml-auto flex items-center gap-3 font-mono text-xs text-dim">
           <select id="model-select" aria-label="Model" class="bg-transparent text-paper/70 outline-none cursor-pointer hover:text-paper transition-colors"></select>
@@ -43,7 +46,8 @@
         <main id="log" class="flex-1 overflow-y-auto px-5 py-8 space-y-5 max-w-3xl w-full mx-auto"></main>
 
         <div id="home-hero" class="max-w-3xl w-full mx-auto">
-          <h1 class="font-display font-semibold text-2xl sm:text-3xl text-paper">Where should we begin?</h1>
+          <div class="home-wordmark">adhd<span>.</span></div>
+          <h1>What can I help with?</h1>
         </div>
 
         <div id="nokey" class="hidden max-w-3xl w-full mx-auto px-5 pb-2">
@@ -68,7 +72,7 @@
           <div id="queue" class="hidden max-w-3xl w-full mx-auto px-5 pt-2 space-y-1"></div>
           <form id="composer" class="max-w-3xl w-full mx-auto px-5 py-3">
             <div class="flex gap-2 items-end bg-surface border border-line rounded-3xl px-2 py-1.5 focus-within:border-dim transition-colors">
-              <textarea id="msg" rows="1" placeholder="Ask adhd anything…"
+              <textarea id="msg" rows="1" placeholder="What is on your mind?"
                 class="flex-1 resize-none bg-transparent px-2.5 py-2 text-sm outline-none max-h-40 placeholder:text-dim"></textarea>
               <button id="send" aria-label="Send" class="shrink-0 grid place-items-center w-9 h-9 rounded-full bg-paper text-base disabled:opacity-30 hover:opacity-90 transition"></button>
             </div>
@@ -101,11 +105,13 @@
     <dialog id="lightbox"></dialog>
 
     <section id="panel" class="hidden fixed inset-0 bg-base overflow-y-auto z-30">
-      <div class="flex items-center gap-3 px-5 h-14 border-b border-line sticky top-0 bg-base">
-        <button class="text-dim hover:text-paper" onclick="closeSettings()">← Back</button>
-        <span class="font-display font-bold">Settings</span>
+      <div class="settings-page-head flex items-center gap-3 px-5 h-16 border-b border-line sticky top-0 bg-base">
+        <button class="settings-back" onclick="closeSettings()" aria-label="Back to chat">←</button>
+        <span class="settings-brand">adhd<span>.</span></span>
+        <span class="header-rule" aria-hidden="true"></span>
+        <span class="font-display font-semibold">Settings</span>
       </div>
-      <div id="settings" class="settings p-5 text-sm max-w-2xl mx-auto"></div>
+      <div id="settings" class="settings text-sm"></div>
     </section>
 
     <!-- Flows: full-screen like #panel. flow.js mounts the React Flow canvas here. -->
