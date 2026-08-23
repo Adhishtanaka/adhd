@@ -26,6 +26,21 @@ export function setRenderSink(fn: (spec: Spec) => void): void {
   renderSink = fn;
 }
 
+// The prompt already says "one References block per answer" and "one FollowUps
+// block", but a model that breaks that rule anyway burns a full step (whole
+// conversation resent) for a block the client was going to dedupe on display
+// regardless — seen live: an identical FollowUps block rendered twice in the
+// same turn. adhd runs one turn at a time (see toollog.ts), so a plain module
+// set reset per turn key is enough to catch the repeat before it costs a
+// second render.
+const ONCE_PER_TURN = new Set(["References", "FollowUps"]);
+let shownThisTurn = new Set<string>();
+let currentTurnKey = "";
+export function setTurnKey(key: string): void {
+  if (key !== currentTurnKey) shownThisTurn = new Set();
+  currentTurnKey = key;
+}
+
 // Content whose data IS the answer — prose after it only restates the cells.
 const STRUCTURED = new Set(["Table", "Metric", "Progress", "List"]);
 // Content that shows rather than tells. A picture of a person answers "what do
@@ -65,6 +80,14 @@ export function renderUiTool(): Tool {
       "Render a rich visual block in the chat — images, an image gallery, a video, a mermaid diagram, cards, or a references/sources list. Use it for visual content and to cite web_search results as clickable references. For plain text answers, just write prose instead of calling this.",
     inputSchema: specSchema,
     execute: async (spec) => {
+      const rootType = spec.elements?.[spec.root]?.type;
+      if (rootType && ONCE_PER_TURN.has(rootType)) {
+        if (shownThisTurn.has(rootType)) {
+          return `Rejected: a ${rootType} block was already shown this turn. Only one is allowed per answer — ` +
+            `don't call render_ui for ${rootType} again.`;
+        }
+        shownThisTurn.add(rootType);
+      }
       renderSink(spec);
       return carriesAnswer(spec)
         ? "UI block rendered — the user can see it. This block carries the whole answer, so write NO further text at all: " +
@@ -120,8 +143,10 @@ export function catalogPromptSection(): string {
     "attribute and one row per item. Do NOT emit a Card full of Text nodes where each node is one item crammed into a " +
     "line with dashes or pipes; that is a table you failed to make. A Card is for ONE subject, not a list of many.\n" +
     "Two hard rules to avoid repetition:\n" +
-    "1. Cite sources ONCE. Emit at most a SINGLE References block per answer, at the very end. Never repeat the same " +
-    "sources across multiple render_ui calls, and don't restate URLs in prose too.\n" +
+    "1. Cite sources ONCE and suggest follow-ups ONCE. Emit at most a SINGLE References block and a SINGLE FollowUps " +
+    "block per answer, both at the very end. A second call for either is rejected — it costs a step for nothing the " +
+    "user didn't already see. Never repeat the same sources across multiple render_ui calls, and don't restate URLs " +
+    "in prose too.\n" +
     "2. Don't say the same thing twice, but DO answer. After MEDIA (Image/Gallery/Video/Svg/Mermaid/Map), write your " +
     "prose answer below it — just don't narrate the picture ('the image above shows…'). A Card that merely FRAMES an " +
     "image is still media: the photo is not the answer, so the facts go underneath it as prose. Only after STRUCTURED " +

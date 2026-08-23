@@ -234,9 +234,11 @@ export function builtinTools(): Record<string, Tool> {
       inputSchema: z.object({ path: z.string().default(".") }),
       execute: async ({ path }) => {
         if (!isUnderRoots(path)) return `"${path}" is outside the allowed folders.`;
-        return readdirSync(path, { withFileTypes: true })
-          .map((d) => (d.isDirectory() ? `${d.name}/` : d.name))
-          .join("\n");
+        return cap(
+          readdirSync(path, { withFileTypes: true })
+            .map((d) => (d.isDirectory() ? `${d.name}/` : d.name))
+            .join("\n"),
+        );
       },
     }),
     grep: tool({

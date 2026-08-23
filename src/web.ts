@@ -5,7 +5,7 @@ import { marked } from "marked";
 import { buildAgent } from "./setup.js";
 import { setBashConfirm, setAskUser, orAfter } from "./tools.js";
 import { setSubagentSink } from "./subagent.js";
-import { setRenderSink, carriesAnswer, type Spec } from "./render.js";
+import { setRenderSink, setTurnKey, carriesAnswer, type Spec } from "./render.js";
 import { sanitize } from "./sanitize.js";
 import { listFailures, clearFailures, removeDomain } from "./failcache.js";
 import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, mcpServers, setMcpServers, setCustomBaseURL, loadConfig, capabilities, setCapabilities, permissionMode, setPermissionMode, disabledTools, setDisabledTools, splitSpec, PROVIDER_KEY, CAPABILITIES, type Capabilities, type KeyName } from "./config.js";
@@ -15,6 +15,7 @@ import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./schedul
 import { loadFlows, saveFlows, seedExamples, toolArgSpecs, RunControl, type Flow } from "./flows.js";
 import { migrateMcpDefaults, mcpCatalog } from "./mcp.js";
 import { todoItems, setTodoSink, resetTodos, loadTodos, type TodoItem } from "./todo.js";
+import { logUser, logAssistant, logToolCall, logToolResult, logUsage, logInfo, logError, recentLogs, toolTotals, clearLogs, type LogRow } from "./toollog.js";
 import type { Agent } from "./agent.js";
 
 // The AI SDK leaves some internal promises unawaited on error; swallow the stray
@@ -251,6 +252,8 @@ async function runTurn(message: string, s: Session) {
   broadcastAll("busy", { busy: true });
   let assistant = "";
   rememberTranscript(s, { type: "user", text: message });
+  const turn = logUser(s.id, message);
+  setTurnKey(`${s.id}:${turn}`);
   try {
     await s.agent.send(message, (e) => {
       switch (e.type) {
@@ -260,12 +263,15 @@ async function runTurn(message: string, s: Session) {
           break;
         case "tool-call":
           broadcast("tool-call", { id: e.id, name: e.name, summary: summarize(e.args) });
+          logToolCall(s.id, turn, e.id, e.name, e.args);
           break;
         case "tool-result":
           broadcast("tool-result", { id: e.id });
+          logToolResult(e.id, e.result);
           break;
         case "usage":
           broadcast("usage", { total: e.total });
+          logUsage(s.id, turn, e.total);
           break;
         case "context":
           broadcast("context", e.stats);
@@ -278,17 +284,22 @@ async function runTurn(message: string, s: Session) {
           break;
         case "info":
           broadcast("info", { message: e.message });
+          logInfo(s.id, turn, e.message);
           break;
         case "error":
           broadcast("error", { message: e.message });
+          logError(s.id, turn, e.message);
           break;
       }
     });
     const html = sanitize(await marked.parse(assistant));
     if (html.trim()) rememberTranscript(s, { type: "assistant", html });
+    logAssistant(s.id, turn, assistant);
     broadcast("done", { html });
   } catch (err) {
-    broadcast("error", { message: (err as Error)?.message ?? String(err) });
+    const message = (err as Error)?.message ?? String(err);
+    broadcast("error", { message });
+    logError(s.id, turn, message);
     broadcast("done", { html: "" });
   } finally {
     s.todos = todoItems(); // hand the checklist back before another session's turn
@@ -719,6 +730,179 @@ function scheduleFragment(): string {
     </form>`;
 }
 
+// A real page at its own URL (GET /log), not a fragment bolted into the SPA —
+// so it can be opened, bookmarked, and read on its own, separate from the chat.
+// Shows the whole activity timeline: prompts, tool calls/results, the assistant's
+// reply, and anything that errored — grouped by turn, oldest first within a turn.
+function logPage(): string {
+  const toolStats = toolTotals();
+  const totals = toolStats
+    .map((t) => `<span class="tool-pill"><span class="status-dot"></span>${esc(t.tool)} <b>${t.calls}×</b><span>${t.tokens.toLocaleString()} tok</span></span>`)
+    .join("");
+
+  const rowHtml = (r: LogRow): string => {
+    const time = new Date(r.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const head = (icon: string, label: string, extra = "") => `<div class="ev-head"><span class="ev-icon" aria-hidden="true">${icon}</span><b>${label}</b>${extra}<time>${time}</time></div>`;
+    if (r.kind === "user") return `<div class="ev ev-user">${head("↑", "You")}<p>${esc(r.content ?? "")}</p></div>`;
+    if (r.kind === "assistant") return `<div class="ev ev-assistant">${head("✦", "Assistant")}<p>${esc(r.content ?? "")}</p></div>`;
+    if (r.kind === "usage") return `<div class="ev ev-usage">${head("◫", "Step usage", `<span class="token-badge">${(r.tokens ?? 0).toLocaleString()} tokens</span>`)}</div>`;
+    if (r.kind === "error") return `<div class="ev ev-error">${head("!", "Error")}<p>${esc(r.content ?? "")}</p></div>`;
+    if (r.kind === "info") return `<div class="ev ev-info">${head("i", "Info")}<p>${esc(r.content ?? "")}</p></div>`;
+    return `<div class="ev ev-tool">
+      ${head("⌘", "Tool call", `<span class="name-badge">${esc(r.name ?? "")}</span>${r.tokens != null ? `<span class="token-badge">${r.tokens.toLocaleString()} tokens</span>` : ""}`)}
+      <div class="payloads">
+        <details><summary><span>Arguments</span><span class="chevron">⌄</span></summary><pre>${esc(r.content ?? "")}</pre></details>
+        <details><summary><span>Result</span><span class="chevron">⌄</span></summary><pre>${esc(r.result ?? "(pending)")}</pre></details>
+      </div>
+    </div>`;
+  };
+
+  const all = recentLogs();
+  const tokenTotal = all.filter((r) => r.kind === "usage").reduce((sum, r) => sum + (r.tokens ?? 0), 0);
+  const toolCallCount = all.filter((r) => r.kind === "tool").length;
+  const errorCount = all.filter((r) => r.kind === "error").length;
+  const sessionCount = new Set(all.map((r) => r.session)).size;
+  const rowsByTurn = Object.values(
+    all.reduce<Record<string, LogRow[]>>((acc, r) => {
+      (acc[`${r.session}:${r.turn}`] ??= []).push(r);
+      return acc;
+    }, {}),
+  ).sort((a, b) => b[0].ts - a[0].ts); // newest turn first; rows within a turn are already id-desc, so reverse them
+  const turns = rowsByTurn
+    .map((rows) => {
+      const ordered = [...rows].reverse();
+      const when = new Date(ordered[0].ts).toLocaleString();
+      const session = esc(ordered[0].session);
+      const prompt = ordered.find((r) => r.kind === "user")?.content ?? "Agent activity";
+      const tools = ordered.filter((r) => r.kind === "tool").length;
+      const tokens = ordered.filter((r) => r.kind === "usage").reduce((sum, r) => sum + (r.tokens ?? 0), 0);
+      return `<section class="turn" data-kinds="${ordered.map((r) => r.kind).join(" ")}">
+        <header class="turn-head">
+          <div class="turn-index">${String(ordered[0].turn).padStart(2, "0")}</div>
+          <div class="turn-title"><h2>${esc(prompt)}</h2><p><time>${when}</time><span>${session.slice(0, 12)}</span></p></div>
+          <div class="turn-meta">${tools ? `<span>${tools} tool${tools === 1 ? "" : "s"}</span>` : ""}${tokens ? `<span>${tokens.toLocaleString()} tok</span>` : ""}</div>
+        </header>
+        <div class="timeline">${ordered.map(rowHtml).join("")}</div>
+      </section>`;
+    })
+    .join("");
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>adhd — activity log</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script>(function(){var t=localStorage.getItem('theme')||'system';if(t==='light'||t==='dark')document.documentElement.dataset.theme=t})();</script>
+<style>
+  :root { color-scheme: dark; --bg: #111315; --panel: #181b1e; --panel-2: #202428; --line: #2b3035; --text: #f0f1f2; --muted: #8d959d; --blue: #70a7ff; --green: #51d5a4; --red: #ff737f; --amber: #f7bd68; --shadow: 0 18px 55px rgb(0 0 0 / .24); }
+  :root[data-theme="light"] { color-scheme: light; --bg: #eef0f2; --panel: #f8f9fa; --panel-2: #e9ecef; --line: #d6dadd; --text: #202326; --muted: #697078; --blue: #2767da; --green: #16885d; --red: #d83246; --amber: #a86400; --shadow: 0 18px 55px rgb(35 40 45 / .09); }
+  @media (prefers-color-scheme: light) { :root:not([data-theme]) { color-scheme: light; --bg: #eef0f2; --panel: #f8f9fa; --panel-2: #e9ecef; --line: #d6dadd; --text: #202326; --muted: #697078; --blue: #2767da; --green: #16885d; --red: #d83246; --amber: #a86400; --shadow: 0 18px 55px rgb(35 40 45 / .09); } }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: "Instrument Sans", sans-serif; }
+  body::before { content: ""; position: fixed; inset: 0; pointer-events: none; background: radial-gradient(circle at 12% -10%, rgb(112 167 255 / .13), transparent 30rem), linear-gradient(90deg, rgb(255 255 255 / .018) 1px, transparent 1px); background-size: auto, 44px 44px; mask-image: linear-gradient(to bottom, black, transparent 42rem); }
+  a { color: inherit; }
+  button, input { font: inherit; }
+  .shell { position: relative; width: min(1120px, calc(100% - 2rem)); margin: 0 auto; padding: 2rem 0 5rem; }
+  .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 2rem; padding: 1.25rem 0 2rem; }
+  .brand { display: inline-flex; align-items: center; gap: .6rem; margin-bottom: 2.2rem; color: var(--muted); font: 500 11px/1 "DM Mono", monospace; letter-spacing: .14em; text-transform: uppercase; text-decoration: none; }
+  .brand-mark { display: grid; place-items: center; width: 27px; height: 27px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--blue); font-size: 17px; }
+  .eyebrow { margin: 0 0 .65rem; color: var(--blue); font: 500 10px/1 "DM Mono", monospace; letter-spacing: .16em; text-transform: uppercase; }
+  h1 { margin: 0; font-size: clamp(2.25rem, 6vw, 4.65rem); font-weight: 600; line-height: .98; letter-spacing: -.055em; }
+  .lede { max-width: 37rem; margin: 1rem 0 0; color: var(--muted); font-size: .92rem; line-height: 1.6; }
+  .clear { display: inline-flex; align-items: center; gap: .5rem; padding: .62rem .9rem; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted); cursor: pointer; font-size: .78rem; transition: .18s ease; }
+  .clear:hover { border-color: color-mix(in srgb, var(--red) 55%, var(--line)); color: var(--red); transform: translateY(-1px); }
+  .summary { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--panel) 88%, transparent); box-shadow: var(--shadow); overflow: hidden; }
+  .metric { min-height: 100px; padding: 1.15rem 1.25rem; border-right: 1px solid var(--line); }
+  .metric:last-child { border-right: 0; }
+  .metric span { display: block; margin-bottom: .8rem; color: var(--muted); font: 500 9px/1 "DM Mono", monospace; letter-spacing: .12em; text-transform: uppercase; }
+  .metric strong { font-size: 1.65rem; font-weight: 600; letter-spacing: -.04em; }
+  .tools { display: flex; align-items: center; gap: .45rem; min-height: 48px; margin: 1rem 0 2.4rem; overflow-x: auto; scrollbar-width: none; }
+  .tools::-webkit-scrollbar { display: none; }
+  .tools-label { flex: 0 0 auto; margin-right: .25rem; color: var(--muted); font: 500 9px/1 "DM Mono", monospace; letter-spacing: .12em; text-transform: uppercase; }
+  .tool-pill { display: inline-flex; align-items: center; gap: .45rem; flex: 0 0 auto; padding: .38rem .62rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); font: 400 10px/1 "DM Mono", monospace; }
+  .tool-pill b { color: var(--text); font-weight: 500; }
+  .status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 14%, transparent); }
+  .controls { position: sticky; top: .75rem; z-index: 10; display: flex; align-items: center; gap: .45rem; width: fit-content; max-width: 100%; margin: 0 0 1rem auto; padding: .35rem; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel) 90%, transparent); backdrop-filter: blur(18px); box-shadow: 0 8px 24px rgb(0 0 0 / .12); overflow-x: auto; }
+  .filter { padding: .42rem .68rem; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font: 500 10px/1 "DM Mono", monospace; text-transform: uppercase; letter-spacing: .06em; }
+  .filter:hover { color: var(--text); }
+  .filter.active { background: var(--text); color: var(--bg); }
+  .turns { display: grid; gap: 1rem; }
+  .turn { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: 0 1px 0 rgb(255 255 255 / .025); overflow: hidden; animation: arrive .35s both; }
+  .turn:nth-child(2) { animation-delay: .04s; } .turn:nth-child(3) { animation-delay: .08s; }
+  @keyframes arrive { from { opacity: 0; transform: translateY(8px); } }
+  .turn-head { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 1rem; min-height: 76px; padding: .9rem 1.1rem; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel-2) 35%, var(--panel)); }
+  .turn-index { display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 10px; color: var(--blue); font: 500 11px/1 "DM Mono", monospace; }
+  .turn-title { min-width: 0; }
+  .turn-title h2 { margin: 0 0 .35rem; overflow: hidden; color: var(--text); font-size: .92rem; font-weight: 600; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+  .turn-title p { display: flex; gap: .75rem; margin: 0; color: var(--muted); font: 400 9px/1.25 "DM Mono", monospace; }
+  .turn-title p span { overflow: hidden; max-width: 12rem; text-overflow: ellipsis; white-space: nowrap; }
+  .turn-meta { display: flex; gap: .4rem; }
+  .turn-meta span, .token-badge, .name-badge { padding: .28rem .48rem; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: var(--panel); font: 500 9px/1 "DM Mono", monospace; white-space: nowrap; }
+  .timeline { position: relative; padding: .45rem 1.1rem .65rem 4.35rem; }
+  .timeline::before { content: ""; position: absolute; top: 1.5rem; bottom: 1.5rem; left: 2.4rem; width: 1px; background: var(--line); }
+  .ev { position: relative; padding: .8rem 0; font-size: .84rem; }
+  .ev-icon { position: absolute; left: -2.48rem; top: .66rem; display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--muted); font: 500 11px/1 "DM Mono", monospace; }
+  .ev-user .ev-icon { color: var(--blue); } .ev-assistant .ev-icon { color: var(--green); } .ev-error .ev-icon { border-color: color-mix(in srgb, var(--red) 45%, var(--line)); color: var(--red); } .ev-info .ev-icon { color: var(--amber); }
+  .ev-head { display: flex; align-items: center; gap: .45rem; min-height: 22px; }
+  .ev-head b { font-size: .74rem; font-weight: 600; }
+  .ev-head time { margin-left: auto; color: var(--muted); font: 400 9px/1 "DM Mono", monospace; }
+  .ev p { margin: .38rem 0 0; color: color-mix(in srgb, var(--text) 88%, var(--muted)); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+  .ev-error p { color: var(--red); }
+  .ev-usage { min-height: 42px; }
+  .payloads { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-top: .55rem; }
+  details { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--panel-2) 45%, transparent); overflow: hidden; }
+  summary { display: flex; align-items: center; justify-content: space-between; padding: .55rem .65rem; color: var(--muted); cursor: pointer; list-style: none; font: 500 9px/1 "DM Mono", monospace; text-transform: uppercase; letter-spacing: .08em; }
+  summary::-webkit-details-marker { display: none; }
+  summary:hover { color: var(--text); }
+  .chevron { transition: transform .15s; } details[open] .chevron { transform: rotate(180deg); }
+  pre { max-height: 320px; margin: 0; padding: .75rem; border-top: 1px solid var(--line); overflow: auto; color: color-mix(in srgb, var(--text) 82%, var(--muted)); font: 400 10px/1.55 "DM Mono", monospace; white-space: pre-wrap; word-break: break-word; }
+  .empty { padding: 4rem 2rem; border: 1px dashed var(--line); border-radius: 14px; color: var(--muted); text-align: center; }
+  .empty strong { display: block; margin-bottom: .45rem; color: var(--text); font-size: 1rem; }
+  [hidden] { display: none !important; }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  @media (max-width: 700px) { .shell { width: min(100% - 1.25rem, 1120px); padding-top: .75rem; } .top { padding-top: .5rem; } h1 { font-size: 2.7rem; } .summary { grid-template-columns: 1fr 1fr; } .metric { min-height: 82px; border-bottom: 1px solid var(--line); } .metric:nth-child(2) { border-right: 0; } .metric:nth-child(3), .metric:nth-child(4) { border-bottom: 0; } .payloads { grid-template-columns: 1fr; } .turn-head { grid-template-columns: 38px minmax(0, 1fr); gap: .7rem; } .turn-index { width: 36px; height: 36px; } .turn-meta { display: none; } .timeline { padding-left: 3.75rem; } .timeline::before { left: 2.15rem; } .ev-icon { left: -2.2rem; } }
+  @media (max-width: 430px) { .top { gap: 1rem; } .clear span { display: none; } .brand { margin-bottom: 1.4rem; } .turn-title p span { display: none; } .controls { margin-left: 0; width: 100%; } }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .turn { animation: none; } * { transition: none !important; } }
+</style>
+</head>
+<body>
+  <main class="shell">
+    <a class="brand" href="/"><span class="brand-mark">←</span> adhd / operations</a>
+    <div class="top">
+      <div><p class="eyebrow">System journal</p><h1>Activity log</h1><p class="lede">A chronological record of prompts, agent decisions, tool calls, results, and their token cost.</p></div>
+      <form method="post" action="/log/clear" onsubmit="return confirm('Clear the activity log? This cannot be undone.')"><button class="clear" type="submit"><span>Clear log</span> ×</button></form>
+    </div>
+    <section class="summary" aria-label="Log summary">
+      <div class="metric"><span>Recorded turns</span><strong>${rowsByTurn.length.toLocaleString()}</strong></div>
+      <div class="metric"><span>Tool calls</span><strong>${toolCallCount.toLocaleString()}</strong></div>
+      <div class="metric"><span>Total usage</span><strong>${tokenTotal.toLocaleString()}<small> tok</small></strong></div>
+      <div class="metric"><span>Sessions / errors</span><strong>${sessionCount}<small> / ${errorCount}</small></strong></div>
+    </section>
+    <div class="tools"><span class="tools-label">Tool footprint</span>${totals || '<span class="tool-pill">No calls yet</span>'}</div>
+    ${turns ? `<nav class="controls" aria-label="Filter activity"><button class="filter active" data-filter="all">All</button><button class="filter" data-filter="tool">Tools</button><button class="filter" data-filter="error">Errors</button></nav>` : ""}
+    <div class="turns">${turns || '<div class="empty"><strong>The journal is quiet.</strong>Send a message in chat and activity will appear here.</div>'}</div>
+  </main>
+  <script>
+    document.querySelectorAll('.filter').forEach(function (button) {
+      button.addEventListener('click', function () {
+        document.querySelectorAll('.filter').forEach(function (item) { item.classList.remove('active'); });
+        button.classList.add('active');
+        var filter = button.dataset.filter;
+        document.querySelectorAll('.turn').forEach(function (turn) {
+          turn.hidden = filter !== 'all' && !turn.dataset.kinds.split(' ').includes(filter);
+        });
+      });
+    });
+  </script>
+</body>
+</html>`;
+}
+
 async function readBody(req: Request): Promise<Record<string, any>> {
   const ct = req.headers.get("content-type") || "";
   if (ct.includes("application/json")) return await req.json();
@@ -1013,6 +1197,9 @@ Bun.serve({
           setMcpServers(rest);
           return html(mcpFragment());
         }
+        case "/log/clear":
+          clearLogs();
+          return Response.redirect("/log", 303);
       }
     }
 
@@ -1025,6 +1212,7 @@ Bun.serve({
       if (p === "/roots") return html(rootsFragment());
       if (p === "/allowed") return html(allowedFragment());
       if (p === "/mcp") return html(mcpFragment());
+      if (p === "/log") return html(logPage());
       if (p === "/state")
         // maptilerKey is a client-side map-tile key (public by design, kept in .env
         // not source) — the browser needs it to load MapTiler tiles.

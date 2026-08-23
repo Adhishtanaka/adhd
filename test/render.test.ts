@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { carriesAnswer, type Spec } from "../src/render.js";
+import { carriesAnswer, renderUiTool, setTurnKey, type Spec } from "../src/render.js";
 
 // Build a spec from [id, type, children?] triples; the first is the root.
 const spec = (...nodes: [string, string, string[]?][]): Spec => ({
@@ -47,4 +47,28 @@ test("sources and follow-up chips are chrome, never the answer", () => {
 
 test("a Card of pure text carries its own answer", () => {
   expect(carriesAnswer(spec(["c", "Card", ["t"]], ["t", "Text"]))).toBe(true);
+});
+
+test("a second References block in the same turn is rejected, a new turn resets it", async () => {
+  const tool = renderUiTool();
+  const refs = spec(["r", "References"]);
+  setTurnKey("turn-a");
+  const first = await tool.execute!(refs, {} as any);
+  expect(String(first)).not.toContain("Rejected");
+  const second = await tool.execute!(refs, {} as any);
+  expect(String(second)).toContain("Rejected");
+  setTurnKey("turn-b");
+  const third = await tool.execute!(refs, {} as any);
+  expect(String(third)).not.toContain("Rejected");
+});
+
+test("a second FollowUps block in the same turn is rejected too, independently of References", async () => {
+  const tool = renderUiTool();
+  setTurnKey("turn-c");
+  const followUps = spec(["f", "FollowUps"]);
+  expect(String(await tool.execute!(followUps, {} as any))).not.toContain("Rejected");
+  expect(String(await tool.execute!(followUps, {} as any))).toContain("Rejected");
+  // References isn't shown yet this turn, so it still goes through.
+  const refs = spec(["r", "References"]);
+  expect(String(await tool.execute!(refs, {} as any))).not.toContain("Rejected");
 });

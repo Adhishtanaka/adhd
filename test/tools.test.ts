@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { formatSerper, keepRealImages, builtinTools } from "../src/tools.js";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { formatSerper, keepRealImages, builtinTools, MAX_OUT } from "../src/tools.js";
 
 const run = (t: any, input: any) => t.execute(input, {} as any);
 
@@ -63,4 +66,16 @@ test("file tools refuse paths outside the allowed roots", async () => {
   expect(await run(t.list_dir, { path: "/etc" })).toContain("outside the allowed folders");
   expect(await run(t.grep, { pattern: "root", path: "/etc" })).toContain("outside the allowed folders");
   expect(await run(t.glob, { pattern: "*", cwd: "/etc" })).toContain("outside the allowed folders");
+});
+
+test("list_dir caps a huge listing instead of dumping it whole into context", async () => {
+  const dir = mkdtempSync(join(homedir(), ".adhd", "list-dir-cap-test-"));
+  try {
+    for (let i = 0; i < 2000; i++) mkdirSync(join(dir, `entry-${i}-${"x".repeat(20)}`));
+    const out: string = await run(builtinTools().list_dir, { path: dir });
+    expect(out.length).toBeLessThanOrEqual(MAX_OUT + 40);
+    expect(out).toContain("truncated");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
