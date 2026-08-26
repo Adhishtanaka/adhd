@@ -9,9 +9,10 @@
   "type": "module",
   "module": "src/web.ts",
   "bin": {
-    "adhd": "src/web.ts"
+    "adhd": "bin/adhd.js"
   },
   "files": [
+    "bin",
     "src",
     "public",
     "README.md",
