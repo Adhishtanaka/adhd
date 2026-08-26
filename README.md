@@ -64,6 +64,8 @@ bun start          # builds the frontend, then opens http://127.0.0.1:8787
 | `list_dir` / `grep` / `glob` | List, regex-search, or glob for files | — |
 | `bash` / `powershell` | Run a shell command | yes |
 | `run_script` | Write and run a Bun/TypeScript snippet | yes |
+| `pip_install` / `run_python` | Install into and run Python from adhd's own sandboxed venv | yes |
+| `npm_install` / `run_node` | Install into and run Node from adhd's own sandboxed npm project | yes |
 | `web_search` | Search the web — pages, images, videos, places, shopping, news | — |
 | `browser` | Drive headless Chrome: read a page as clean markdown, snapshot its elements, screenshot, fill/click/type/press, eval JS | on changes |
 | `search_files` | Find your own local images/videos/docs to show | — |
@@ -76,6 +78,8 @@ bun start          # builds the frontend, then opens http://127.0.0.1:8787
 | `run_flow` | Run a saved Flow by name | — |
 | `render_ui` | Draw a rich block — image, gallery, table, chart, map, sources | — |
 | `ask_user` | Ask a multiple-choice question | interactive |
+
+`pip_install`/`run_python` and `npm_install`/`run_node` never touch your system Python or a real project's `node_modules` — packages and scripts land in `~/.adhd/sandbox/python` (its own venv) and `~/.adhd/sandbox/node` (its own npm project), created on first use. A package installed there stays there.
 
 Tools from any [MCP](https://modelcontextprotocol.io) server you add appear here too, named `<server>_<tool>` — see [Extending](#extending).
 
@@ -164,6 +168,7 @@ Merged from `~/.adhd/config.json`, then `./.adhd/config.json` (project wins). Ev
 | `flows.json` | saved Flows |
 | `tools/<name>.ts` | your custom tools |
 | `skills/<name>/SKILL.md` | your skills |
+| `sandbox/python/`, `sandbox/node/` | isolated venv / npm project for `pip_install`/`npm_install` |
 
 ### Extending
 

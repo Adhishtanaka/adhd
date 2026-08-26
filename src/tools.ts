@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, unlinkSync } from "node:fs";
 import { join, dirname, basename, extname, sep } from "node:path";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { tool, type Tool } from "ai";
 import { z } from "zod";
-import { ROOTS, allowedRoots, isUnderRoots, isUnderRootsForWrite, allowedCommands, permissionMode } from "./config.js";
+import { ROOTS, HOME_ROOT, allowedRoots, isUnderRoots, isUnderRootsForWrite, allowedCommands, permissionMode } from "./config.js";
 import { isBadDomain, domainOf } from "./failcache.js";
 import { withDeadline } from "./jobs.js";
 import { guardUntrustedContent } from "./security.js";
@@ -134,6 +134,43 @@ export type AskUser = (question: string, options: string[]) => Promise<string>;
 let askUser: AskUser = async (_q, options) => options[0] ?? "";
 export function setAskUser(fn: AskUser) {
   askUser = fn;
+}
+
+// --- Python/npm sandbox ------------------------------------------------------
+// pip/npm installs and ad-hoc scripts default to touching the user's real
+// system Python or the project's own node_modules — this gives the model a
+// dedicated, isolated place instead: its own venv and its own npm project,
+// both inside ~/.adhd where they can't collide with or pollute anything real.
+export const SANDBOX_DIR = join(HOME_ROOT, "sandbox");
+export const PY_SANDBOX = join(SANDBOX_DIR, "python");
+const PY_VENV = join(PY_SANDBOX, ".venv");
+export const NODE_SANDBOX = join(SANDBOX_DIR, "node");
+
+const isWin = process.platform === "win32";
+const venvBin = (name: string) => join(PY_VENV, isWin ? "Scripts" : "bin", isWin ? `${name}.exe` : name);
+
+// Creates ~/.adhd/sandbox/python/.venv the first time it's needed. Returns an
+// error string on failure (no python3 on PATH, etc.) so callers can surface it
+// to the model instead of crashing; returns null on success/already-there.
+async function ensurePyVenv(): Promise<string | null> {
+  if (existsSync(venvBin("python"))) return null;
+  mkdirSync(PY_SANDBOX, { recursive: true });
+  try {
+    await execFileAsync(isWin ? "python" : "python3", ["-m", "venv", PY_VENV], { timeout: 60_000 });
+    return null;
+  } catch (e) {
+    return `couldn't set up the sandbox venv (needs python3 installed): ${(e as Error).message}`;
+  }
+}
+
+// Creates ~/.adhd/sandbox/node/package.json the first time it's needed, so
+// `npm install` has a project to install into instead of erroring or reaching
+// for whatever directory the shell happens to be in.
+function ensureNodeSandbox(): void {
+  mkdirSync(NODE_SANDBOX, { recursive: true });
+  const pkgJson = join(NODE_SANDBOX, "package.json");
+  if (!existsSync(pkgJson))
+    writeFileSync(pkgJson, JSON.stringify({ name: "adhd-sandbox", private: true, version: "0.0.0" }, null, 2));
 }
 
 // Keep tool output small — it all lands back in the model's context and a tiny
@@ -404,6 +441,137 @@ export function builtinTools(): Record<string, Tool> {
             return cap((stdout + stderr).trim()) || "(no output)";
           } catch (e) {
             return `script failed: ${(e as Error).message}`;
+          }
+        });
+      },
+    }),
+    pip_install: tool({
+      description:
+        "Install Python packages into adhd's own sandboxed virtual environment (~/.adhd/sandbox/python/.venv) — " +
+        "never your system or project Python. Creates the venv on first use. Use this instead of `pip install` " +
+        "via bash whenever you want to try or use a Python package; follow up with run_python to use it.",
+      inputSchema: z.object({
+        packages: z.array(z.string()).min(1).describe("package names, e.g. ['pandas', 'requests==2.31.0']"),
+        explain: EXPLAIN,
+      }),
+      execute: async ({ packages, explain }) => {
+        if (!(await approve("pip_install", `pip install ${packages.join(" ")}  (sandboxed, ~/.adhd/sandbox/python)`, explain)))
+          return "user denied install";
+        return withDeadline(`pip_install: ${packages.join(" ")}`, SLOW.shell, async () => {
+          const err = await ensurePyVenv();
+          if (err) return err;
+          try {
+            const { stdout, stderr } = await execFileAsync(venvBin("pip"), ["install", ...packages], {
+              maxBuffer: 10 * 1024 * 1024,
+              timeout: 120_000,
+            });
+            return cap((stdout + stderr).trim()) || "(no output)";
+          } catch (e) {
+            return `pip install failed: ${(e as Error).message}`;
+          }
+        });
+      },
+    }),
+    npm_install: tool({
+      description:
+        "Install npm packages into adhd's own sandboxed Node project (~/.adhd/sandbox/node) — never your real " +
+        "project's node_modules. Creates the project on first use. Use this instead of `npm install` via bash " +
+        "whenever you want to try or use a package; follow up with run_node to use it.",
+      inputSchema: z.object({
+        packages: z.array(z.string()).min(1).describe("package names, e.g. ['lodash', 'axios@1.6.0']"),
+        explain: EXPLAIN,
+      }),
+      execute: async ({ packages, explain }) => {
+        if (!(await approve("npm_install", `npm install ${packages.join(" ")}  (sandboxed, ~/.adhd/sandbox/node)`, explain)))
+          return "user denied install";
+        return withDeadline(`npm_install: ${packages.join(" ")}`, SLOW.shell, async () => {
+          ensureNodeSandbox();
+          try {
+            const { stdout, stderr } = await execFileAsync("npm", ["install", ...packages], {
+              cwd: NODE_SANDBOX,
+              maxBuffer: 10 * 1024 * 1024,
+              timeout: 120_000,
+            });
+            return cap((stdout + stderr).trim()) || "(no output)";
+          } catch (e: any) {
+            if (e.code === "ENOENT") return "npm_install needs Node.js/npm installed.";
+            return `npm install failed: ${e.message}`;
+          }
+        });
+      },
+    }),
+    run_python: tool({
+      description:
+        "Write a Python snippet to a temp file and run it with the sandboxed interpreter at " +
+        "~/.adhd/sandbox/python/.venv (created on first use; packages from pip_install are available there). " +
+        "The user must approve it first. Never touches your system or project Python.",
+      inputSchema: z.object({ code: z.string(), explain: EXPLAIN }),
+      execute: async ({ code, explain }) => {
+        if (
+          !(await confirmBash({
+            command: `python <script>\n${code}`,
+            explain,
+            allowKey: null,
+            dangerReason: "executes arbitrary code (sandboxed Python venv, isolated from your system)",
+          }))
+        )
+          return "user denied script";
+        const err = await ensurePyVenv();
+        if (err) return err;
+        const file = join(tmpdir(), `adhd-${Date.now()}.py`);
+        writeFileSync(file, code);
+        return withDeadline(`run_python: ${code.split("\n")[0]}`, SLOW.shell, async () => {
+          try {
+            const { stdout, stderr } = await execFileAsync(venvBin("python"), [file], {
+              maxBuffer: 10 * 1024 * 1024,
+              timeout: 120_000,
+            });
+            return cap((stdout + stderr).trim()) || "(no output)";
+          } catch (e) {
+            return `script failed: ${(e as Error).message}`;
+          }
+        });
+      },
+    }),
+    run_node: tool({
+      description:
+        "Write a JavaScript snippet to a temp file and run it with Node inside adhd's sandboxed npm project " +
+        "(~/.adhd/sandbox/node — packages from npm_install resolve from there via require()). The user must " +
+        "approve it first. Prefer run_script (Bun/TS) unless you specifically need an npm_install'd package.",
+      inputSchema: z.object({ code: z.string(), explain: EXPLAIN }),
+      execute: async ({ code, explain }) => {
+        if (
+          !(await confirmBash({
+            command: `node <script>\n${code}`,
+            explain,
+            allowKey: null,
+            dangerReason: "executes arbitrary code (sandboxed Node project, isolated from your real projects)",
+          }))
+        )
+          return "user denied script";
+        ensureNodeSandbox();
+        // Written INSIDE the sandbox (not tmpdir) so Node's module resolution
+        // walks up to ~/.adhd/sandbox/node/node_modules and finds installed
+        // packages — resolution follows the script's own path, not the cwd.
+        const file = join(NODE_SANDBOX, `adhd-${Date.now()}.js`);
+        writeFileSync(file, code);
+        return withDeadline(`run_node: ${code.split("\n")[0]}`, SLOW.shell, async () => {
+          try {
+            const { stdout, stderr } = await execFileAsync("node", [file], {
+              cwd: NODE_SANDBOX,
+              maxBuffer: 10 * 1024 * 1024,
+              timeout: 120_000,
+            });
+            return cap((stdout + stderr).trim()) || "(no output)";
+          } catch (e: any) {
+            if (e.code === "ENOENT") return "run_node needs Node.js installed.";
+            return `script failed: ${e.message}`;
+          } finally {
+            try {
+              unlinkSync(file);
+            } catch {
+              /* best-effort cleanup */
+            }
           }
         });
       },

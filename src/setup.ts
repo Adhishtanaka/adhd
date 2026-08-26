@@ -113,6 +113,7 @@ const TOOL_CAP: Record<string, keyof Capabilities> = {
   read_file: "files", write_file: "files", list_dir: "files", grep: "files",
   glob: "files", search_files: "files",
   bash: "shell", powershell: "shell", run_script: "shell",
+  pip_install: "shell", npm_install: "shell", run_python: "shell", run_node: "shell",
   web_search: "web", browser: "web",
   remember: "memory", recall: "memory",
   use_skill: "skills",
