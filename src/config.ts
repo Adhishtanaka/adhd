@@ -46,6 +46,7 @@ export type Capabilities = {
   flows: boolean; // run_flow (the Flows page still works)
   renderUi: boolean; // render_ui + its component catalog in the system prompt
   todo: boolean; // the task list the agent keeps while it works
+  reflect: boolean; // the daily log-mining pass + its Settings review tab
 };
 
 export const CAPABILITIES: Capabilities = {
@@ -60,6 +61,7 @@ export const CAPABILITIES: Capabilities = {
   flows: true,
   renderUi: true,
   todo: true,
+  reflect: true,
 };
 
 export function capabilities(config = loadConfig()): Capabilities {

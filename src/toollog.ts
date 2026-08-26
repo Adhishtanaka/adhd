@@ -28,6 +28,7 @@ const insertRow = db.query(
 const setResult = db.query(`UPDATE event_log SET result = ? WHERE id = ?`);
 const setTokens = db.query(`UPDATE event_log SET tokens = ? WHERE id IN (SELECT value FROM json_each(?))`);
 const recent = db.query(`SELECT * FROM event_log ORDER BY id DESC LIMIT ?`);
+const since = db.query(`SELECT * FROM event_log WHERE id > ? ORDER BY id ASC`);
 const totals = db.query(
   `SELECT name as tool, COUNT(*) as calls, COALESCE(SUM(tokens), 0) as tokens
    FROM event_log WHERE kind = 'tool' GROUP BY name ORDER BY tokens DESC`,
@@ -120,5 +121,8 @@ export type LogRow = {
   tokens: number | null;
 };
 export const recentLogs = (limit = 500): LogRow[] => recent.all(limit) as LogRow[];
+// Rows added since a watermark id — what reflect.ts scans on each pass, so it
+// never re-mines the same activity twice.
+export const logsSince = (id: number): LogRow[] => since.all(id) as LogRow[];
 export const toolTotals = (): { tool: string; calls: number; tokens: number }[] => totals.all() as any;
 export const clearLogs = (): void => void db.exec("DELETE FROM event_log");
