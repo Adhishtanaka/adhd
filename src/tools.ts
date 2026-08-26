@@ -139,6 +139,10 @@ export function setAskUser(fn: AskUser) {
 // Keep tool output small — it all lands back in the model's context and a tiny
 // tokens-per-minute budget fills up fast. ponytail: crude char caps beat dumps.
 export const MAX_OUT = 2500;
+// read_file's default window, in lines, when the model doesn't ask for a
+// specific slice. Large enough for most files whole; small enough that a huge
+// one doesn't blow the budget before the model even decides it needs more.
+export const DEFAULT_READ_LINES = 200;
 export function cap(s: string, max = MAX_OUT): string {
   return s.length <= max ? s : s.slice(0, max) + `\n…[truncated ${s.length - max} chars]`;
 }
@@ -214,10 +218,26 @@ export function formatSerper(type: SerperType, r: any): string {
 export function builtinTools(): Record<string, Tool> {
   const t: Record<string, Tool> = {
     read_file: tool({
-      description: "Read a UTF-8 text file and return its contents.",
-      inputSchema: z.object({ path: z.string() }),
-      execute: async ({ path }) =>
-        isUnderRoots(path) ? cap(readFileSync(path, "utf8")) : `"${path}" is outside the allowed folders.`,
+      description:
+        `Read a UTF-8 text file. Returns a window of up to ${DEFAULT_READ_LINES} lines by default, headed by ` +
+        "the total line count, so a large file never silently gets cut off mid-content without you knowing " +
+        "there's more. If what you need isn't in that window, call again with `offset` (1-based line number) " +
+        "and/or `limit` to page to the part you actually need — cheaper than reading files whole, and prefer " +
+        "grep first to find which lines matter in a big file.",
+      inputSchema: z.object({
+        path: z.string(),
+        offset: z.number().int().min(1).optional().describe("1-based line number to start from (default 1)"),
+        limit: z.number().int().min(1).optional().describe(`max lines to return (default ${DEFAULT_READ_LINES})`),
+      }),
+      execute: async ({ path, offset, limit }) => {
+        if (!isUnderRoots(path)) return `"${path}" is outside the allowed folders.`;
+        const lines = readFileSync(path, "utf8").split("\n");
+        const start = offset ?? 1;
+        if (start > lines.length) return `"${path}" has ${lines.length} lines — offset ${start} is past the end.`;
+        const end = Math.min(lines.length, start - 1 + (limit ?? DEFAULT_READ_LINES));
+        const window = lines.slice(start - 1, end).join("\n");
+        return cap(`[lines ${start}-${end} of ${lines.length}]\n${window}`);
+      },
     }),
     write_file: tool({
       description: "Write text to a file, creating parent dirs. Overwrites.",

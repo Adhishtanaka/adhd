@@ -60,7 +60,7 @@ bun start          # builds the frontend, then opens http://127.0.0.1:8787
 
 | Tool | What it does | Asks first |
 |------|--------------|:---------:|
-| `read_file` / `write_file` | Read or write a text file | — |
+| `read_file` / `write_file` | Read (paged, `offset`/`limit`) or write a text file | — |
 | `list_dir` / `grep` / `glob` | List, regex-search, or glob for files | — |
 | `bash` / `powershell` | Run a shell command | yes |
 | `run_script` | Write and run a Bun/TypeScript snippet | yes |
