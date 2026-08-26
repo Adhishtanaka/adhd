@@ -448,8 +448,9 @@ const hxVals = (v: Record<string, unknown>) => esc(JSON.stringify(v));
 // five round-trips along with the race. The /memory, /schedule, /roots,
 // /allowed and /failures endpoints still exist — the forms POST to them and
 // swap the result into #mem, #sched, etc.
-function settingsFragment(): string {
+function settingsFragment(error?: string): string {
   const ks = keyStatus();
+  const errorBanner = error ? `<p class="muted" style="color:var(--danger,#c33)">${esc(error)}</p>` : "";
   const keyRows = KEY_NAMES.map(
     (k) => `<div class="row">
         <span class="mono">${k}</span>
@@ -512,9 +513,10 @@ function settingsFragment(): string {
       "models",
       "Keys",
       "Connect model providers and choose a custom endpoint.",
-      `<p class="muted">Stored in <span class="mono">~/.adhd/secrets.json</span> (chmod 600). Keys never leave this machine.
+      `${errorBanner}<p class="muted">Stored in <span class="mono">~/.adhd/secrets.json</span> (chmod 600). Keys never leave this machine.
        You only need a key for the provider you actually use — a model is named <span class="mono">provider:id</span>
-       (<span class="mono">anthropic:claude-sonnet-5</span>), and a bare id means DeepSeek.</p>
+       (<span class="mono">anthropic:claude-sonnet-5</span>), and a bare id means DeepSeek. A <span class="mono">custom:</span>
+       model (OpenRouter, Ollama, LM Studio…) needs the base URL below; local servers like Ollama usually need no key at all.</p>
       <div class="settings-section">${keyRows}</div>
       <h2>Any other model <span class="muted">(not in the dropdown)</span></h2>
       <div class="settings-section">
@@ -1161,14 +1163,24 @@ const server = Bun.serve({
         }
         case "/model":
           if (b.id) {
-            built.setModel(b.id);
-            // Machine-level: one model, every session. Announce it to all of them.
-            broadcastAll("model", { model: b.id });
+            try {
+              built.setModel(b.id);
+              // Machine-level: one model, every session. Announce it to all of them.
+              broadcastAll("model", { model: b.id });
+            } catch (err) {
+              // A bad id or a still-missing key must not 500 the settings panel —
+              // that reads as "nothing happened" instead of naming the problem.
+              return html(settingsFragment((err as Error).message));
+            }
           }
           return html(settingsFragment());
         case "/keys": {
           for (const k of KEY_NAMES) if (b[k]) writeSecret(k as KeyName, b[k].trim());
-          built.refreshModels();
+          try {
+            built.refreshModels();
+          } catch (err) {
+            return html(settingsFragment((err as Error).message));
+          }
           return html(settingsFragment());
         }
         // Capability groups and individual tools both end at the same place:
@@ -1196,7 +1208,11 @@ const server = Bun.serve({
           if (b.url) {
             setCustomBaseURL(b.url.trim());
             built.config.customBaseURL = b.url.trim();
-            built.refreshModels();
+            try {
+              built.refreshModels();
+            } catch (err) {
+              return html(settingsFragment((err as Error).message));
+            }
           }
           return html(settingsFragment());
         case "/memory":

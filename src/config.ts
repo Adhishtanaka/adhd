@@ -155,7 +155,11 @@ export function loadConfig(): Config {
 export function resolveModel(spec: string, config: Config): LanguageModel {
   const [provider, id] = splitSpec(spec);
   const key = process.env[PROVIDER_KEY[provider]];
-  if (!key)
+  // "custom" covers self-hosted endpoints (Ollama, LM Studio) that take no
+  // auth at all, alongside keyed ones (OpenRouter, Groq) — so it's the one
+  // provider that doesn't get to demand a key up front. A keyed endpoint hit
+  // without one just 401s at chat time, which is the truthful error.
+  if (!key && provider !== "custom")
     throw new Error(`missing ${PROVIDER_KEY[provider]} (add it in Settings, or put it in .env)`);
   switch (provider) {
     case "anthropic":
@@ -167,7 +171,7 @@ export function resolveModel(spec: string, config: Config): LanguageModel {
       // Ollama, LM Studio, OpenAI itself. The base URL is what picks which.
       return createOpenAICompatible({
         name: "custom",
-        apiKey: key,
+        apiKey: key || "not-needed",
         baseURL: config.customBaseURL || "https://openrouter.ai/api/v1",
       })(id);
     default:

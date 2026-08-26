@@ -289,7 +289,11 @@ export async function buildAgent(): Promise<Built> {
     memoryIds: memories.map((m) => m.id),
     runFlow,
     toolArgs: toolArgSpecs(subagentTools),
-    hasKey: () => !!process.env[PROVIDER_KEY[splitSpec(config.model)[0]]],
+    // "custom" (Ollama, LM Studio…) may run with no auth at all — see resolveModel.
+    hasKey: () => {
+      const provider = splitSpec(config.model)[0];
+      return provider === "custom" || !!process.env[PROVIDER_KEY[provider]];
+    },
     setModel: (id) => {
       config.model = id; // before swap: applyContext reads config.model
       swap([id]);
