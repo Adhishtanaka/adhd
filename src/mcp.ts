@@ -78,6 +78,15 @@ export type McpToolInfo = { name: string; full: string; description: string };
 const catalog: Record<string, McpToolInfo[]> = {};
 export const mcpCatalog = (): Record<string, McpToolInfo[]> => catalog;
 
+// Each client's close() ends its StdioClientTransport, which kills the
+// server's child process (SIGTERM after a 2s grace period — see the SDK).
+// Called on shutdown so a stdio server left running doesn't hold the
+// terminal open after Ctrl+C, especially on Windows where an orphaned child
+// keeps the console's process group alive and the shell hanging.
+export async function closeMcpClients(): Promise<void> {
+  await Promise.all(clients.map((c) => c.close().catch(() => {})));
+}
+
 async function connect(name: string, spec: McpServer): Promise<Record<string, Tool>> {
   const client = new Client({ name: "adhd", version: "0.1.0" });
   await client.connect(

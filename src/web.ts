@@ -13,9 +13,10 @@ import { setJobSinks, type FinishedJob } from "./jobs.js";
 import { loadMemories, saveMemory, deleteMemory } from "./memory.js";
 import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./scheduler.js";
 import { loadFlows, saveFlows, seedExamples, toolArgSpecs, RunControl, type Flow } from "./flows.js";
-import { migrateMcpDefaults, mcpCatalog } from "./mcp.js";
+import { migrateMcpDefaults, mcpCatalog, closeMcpClients } from "./mcp.js";
 import { todoItems, setTodoSink, resetTodos, loadTodos, type TodoItem } from "./todo.js";
 import { logUser, logAssistant, logToolCall, logToolResult, logUsage, logInfo, logError, recentLogs, toolTotals, clearLogs, type LogRow } from "./toollog.js";
+import { runReflection, approveProposal, rejectProposal, loadProposals, seedReflectTask } from "./reflect.js";
 import type { Agent } from "./agent.js";
 
 // The AI SDK leaves some internal promises unawaited on error; swallow the stray
@@ -27,6 +28,7 @@ migrateMcpDefaults(); // drop the old seeded Chrome server — must precede buil
 const built = await buildAgent();
 setTodoSink((items) => broadcast("todos", { items })); // agent's plan → the strip under the composer
 seedExamples(); // first run: put a few worked examples on the Flows page
+seedReflectTask(); // first run: schedule the daily reflect pass
 
 // Prefer public/ next to the source; fall back to cwd/public (compiled binary,
 // where import.meta.dir isn't a real directory).
@@ -391,28 +393,51 @@ async function runFlowById(id: string): Promise<void> {
 
 // --- scheduler tick (moved from the Ink UI) ---------------------------------
 const lastRun: Record<string, number> = {};
-setInterval(() => {
+const schedulerTimer = setInterval(() => {
   if (busy || !built.hasKey()) return;
   const now = new Date();
   for (const t of loadSchedule()) {
-    if (isDue(t, now, lastRun[t.id])) {
-      lastRun[t.id] = now.getTime();
-      // Nobody asked for this, so it lands in the transcript most recently in use
-      // rather than in every open window at once.
-      const owner = ownerSession();
-      broadcast("info", { message: `[scheduled] ${t.id}` }, owner);
-      broadcast("notify", { title: `Scheduled: ${t.id}`, body: t.prompt }, owner);
-      // A prompt of "flow:<id>" runs a saved flow instead of a chat turn — reuses
-      // the existing schedule format, so no migration and no extra UI.
-      if (t.prompt.startsWith("flow:")) void runFlowById(t.prompt.slice(5).trim());
-      else void runTurn(t.prompt, owner);
-      break; // one at a time
+    if (!isDue(t, now, lastRun[t.id])) continue;
+    lastRun[t.id] = now.getTime();
+    // Nobody asked for this, so it lands in the transcript most recently in use
+    // rather than in every open window at once.
+    const owner = ownerSession();
+    // The seeded daily "reflect" task is a plain function call, not a chat turn —
+    // it never touches the agent or `busy`, so scanning the log costs no tokens.
+    if (t.prompt === "reflect") {
+      if (capabilities(loadConfig()).reflect) {
+        const added = runReflection(4);
+        if (added.length)
+          broadcast(
+            "notify",
+            { title: "Reflect", body: `${added.length} new suggestion(s) — review in Settings → Reflect` },
+            owner,
+          );
+      }
+      break;
     }
+    broadcast("info", { message: `[scheduled] ${t.id}` }, owner);
+    broadcast("notify", { title: `Scheduled: ${t.id}`, body: t.prompt }, owner);
+    // A prompt of "flow:<id>" runs a saved flow instead of a chat turn — reuses
+    // the existing schedule format, so no migration and no extra UI.
+    if (t.prompt.startsWith("flow:")) void runFlowById(t.prompt.slice(5).trim());
+    else void runTurn(t.prompt, owner);
+    break; // one at a time
   }
 }, 30_000);
 
 // --- HTML fragments (HTMX targets) ------------------------------------------
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+// hx-vals must be a JSON blob (htmx JSON.parses the attribute), so a value is
+// never safe to hand-splice into `{"key":"${esc(value)}"}` — esc() only
+// HTML-escapes, it doesn't JSON-escape. A raw backslash (e.g. a Windows path
+// like C:\Users\...) survives esc() untouched and then breaks htmx's
+// JSON.parse (`\U` isn't a valid JSON escape). JSON.stringify does that
+// escaping correctly; esc() then HTML-escapes the result's quotes so the
+// blob survives being embedded in a single-quoted HTML attribute (the
+// browser decodes &quot; back to " before htmx ever sees it).
+const hxVals = (v: Record<string, unknown>) => esc(JSON.stringify(v));
 
 // Every section is rendered INLINE, not as a nested `hx-trigger="load"` div that
 // fetches itself. Those self-loading children raced the parent: re-swapping
@@ -455,6 +480,7 @@ function settingsFragment(): string {
       <button type="button" role="tab" id="settings-tab-tools" data-settings-tab="tools" aria-controls="settings-panel-tools">Tools</button>
       <button type="button" role="tab" id="settings-tab-access" data-settings-tab="access" aria-controls="settings-panel-access">Access</button>
       <button type="button" role="tab" id="settings-tab-memory" data-settings-tab="memory" aria-controls="settings-panel-memory">Memory</button>
+      <button type="button" role="tab" id="settings-tab-reflect" data-settings-tab="reflect" aria-controls="settings-panel-reflect">Reflect</button>
     </div>
     <div class="settings-panels">` +
     tab(
@@ -537,6 +563,15 @@ function settingsFragment(): string {
       <div class="settings-section"><div id="mem">${memoryFragment()}</div></div>
       <h2>Schedule</h2>
       <div class="settings-section"><div id="sched">${scheduleFragment()}</div></div>`,
+    ) +
+    tab(
+      "reflect",
+      "Reflect",
+      `${n(loadProposals().length, "suggestion")} waiting for review.`,
+      `<p class="muted">Once a day, adhd scans its own activity log for things that keep repeating — the same
+       few tool calls in a row, or the same kind of request — and drafts a memory or a flow for it here.
+       Nothing is saved until you approve it.</p>
+      <div class="settings-section"><div id="reflect">${reflectFragment()}</div></div>`,
     ) + `</div>`;
 }
 
@@ -545,7 +580,7 @@ function rootsFragment(): string {
     .map(
       (r) => `<div class="row">
         <span class="mono">${esc(r)}</span>
-        <button class="btn ghost" hx-post="/roots/delete" hx-vals='{"root":"${esc(r)}"}' hx-target="#roots" hx-swap="innerHTML">Remove</button>
+        <button class="btn ghost" hx-post="/roots/delete" hx-vals='${hxVals({ root: r })}' hx-target="#roots" hx-swap="innerHTML">Remove</button>
       </div>`,
     )
     .join("");
@@ -562,7 +597,7 @@ function allowedFragment(): string {
       const [runner, prog] = k.split(":");
       return `<div class="row">
         <span class="mono">${esc(prog ?? k)} <span class="muted">(${esc(runner ?? "")})</span></span>
-        <button class="btn ghost" hx-post="/allowed/delete" hx-vals='{"key":"${esc(k)}"}' hx-target="#allowed" hx-swap="innerHTML">Revoke</button>
+        <button class="btn ghost" hx-post="/allowed/delete" hx-vals='${hxVals({ key: k })}' hx-target="#allowed" hx-swap="innerHTML">Revoke</button>
       </div>`;
     })
     .join("");
@@ -582,7 +617,7 @@ function toggleRow(label: string, note: string, on: boolean, post: string, vals:
       <span>${label}${note ? ` <span class="muted">${note}</span>` : ""}</span>
       <span class="switch">
         <input type="checkbox" ${on ? "checked" : ""}
-          hx-post="${post}" hx-trigger="change" hx-vals='${esc(JSON.stringify({ ...vals, on: !on }))}'
+          hx-post="${post}" hx-trigger="change" hx-vals='${hxVals({ ...vals, on: !on })}'
           hx-target="#settings" hx-swap="innerHTML" /><span class="track"></span>
       </span>
     </label>`;
@@ -600,6 +635,7 @@ const CAP_LABEL: Record<keyof Capabilities, [string, string]> = {
   flows: ["Run flows from chat", "the Flows page keeps working"],
   renderUi: ["Rich replies", "charts, maps, galleries"],
   todo: ["Task list", "show its plan while it works"],
+  reflect: ["Reflect", "daily scan for repeats worth turning into memory or a flow"],
 };
 
 // Every group here is context you pay for on every request, so the counts are
@@ -662,7 +698,7 @@ function mcpFragment(): string {
         <div><span class="mono">${esc(name)}</span>
           <span class="muted">${esc([s.command, ...(s.args ?? [])].join(" "))}</span>
           <span class="badge ${s.trust === "read" ? "ok" : ""}">${s.trust === "read" ? "read-only" : "asks first"}</span></div>
-        <button class="btn ghost" hx-post="/mcp/delete" hx-vals='{"name":"${esc(name)}"}' hx-target="#mcp" hx-swap="innerHTML" hx-confirm="Remove ${esc(name)}?">Remove</button>
+        <button class="btn ghost" hx-post="/mcp/delete" hx-vals='${hxVals({ name })}' hx-target="#mcp" hx-swap="innerHTML" hx-confirm="Remove ${esc(name)}?">Remove</button>
       </div>
       ${tools.length ? `<details class="settings-group"><summary>${tools.length} tools <span class="muted">${live} on</span></summary>${list}</details>` : ""}`;
     })
@@ -686,7 +722,7 @@ function failuresFragment(): string {
     .map(
       (f) => `<div class="row">
         <div><span class="mono">${esc(f.domain)}</span> <span class="badge">${f.count}×</span> <span class="muted">${esc(f.reason)}</span></div>
-        <button class="btn ghost" hx-post="/failures/delete" hx-vals='{"domain":"${esc(f.domain)}"}' hx-target="#fails" hx-swap="innerHTML">Unblock</button>
+        <button class="btn ghost" hx-post="/failures/delete" hx-vals='${hxVals({ domain: f.domain })}' hx-target="#fails" hx-swap="innerHTML">Unblock</button>
       </div>`,
     )
     .join("");
@@ -699,7 +735,7 @@ function memoryFragment(): string {
     .map(
       (m) => `<div class="row">
         <div><span class="mono">${esc(m.id)}</span> <span class="muted">${esc(m.description)}</span></div>
-        <button class="btn ghost" hx-post="/memory/delete" hx-vals='{"id":"${esc(m.id)}"}' hx-target="#mem" hx-swap="innerHTML" hx-confirm="Delete ${esc(m.id)}?">Delete</button>
+        <button class="btn ghost" hx-post="/memory/delete" hx-vals='${hxVals({ id: m.id })}' hx-target="#mem" hx-swap="innerHTML" hx-confirm="Delete ${esc(m.id)}?">Delete</button>
       </div>`,
     )
     .join("");
@@ -717,7 +753,7 @@ function scheduleFragment(): string {
     .map(
       (t) => `<div class="row">
         <div><span class="mono">${esc(t.id)}</span> <span class="badge">${esc(t.at)}</span> <span class="muted">${esc(t.prompt)}</span></div>
-        <button class="btn ghost" hx-post="/schedule/delete" hx-vals='{"id":"${esc(t.id)}"}' hx-target="#sched" hx-swap="innerHTML">Delete</button>
+        <button class="btn ghost" hx-post="/schedule/delete" hx-vals='${hxVals({ id: t.id })}' hx-target="#sched" hx-swap="innerHTML">Delete</button>
       </div>`,
     )
     .join("");
@@ -728,6 +764,25 @@ function scheduleFragment(): string {
       <input name="prompt" placeholder="what to do" required />
       <button class="btn">Add task</button>
     </form>`;
+}
+
+// Nothing here was written by you — every row is a draft reflection proposed
+// after a pattern repeated at least 4 times. Nothing lands in memory/flows
+// until you hit Approve.
+function reflectFragment(): string {
+  const rows = loadProposals()
+    .map(
+      (p) => `<div class="row">
+        <div><span class="badge">${esc(p.kind)}</span> <span class="muted">${esc(p.summary)}</span></div>
+        <span class="inline">
+          <button class="btn ghost" hx-post="/reflect/reject" hx-vals='${hxVals({ id: p.id })}' hx-target="#reflect" hx-swap="innerHTML">Dismiss</button>
+          <button class="btn" hx-post="/reflect/approve" hx-vals='${hxVals({ id: p.id })}' hx-target="#reflect" hx-swap="innerHTML">Approve</button>
+        </span>
+      </div>`,
+    )
+    .join("");
+  return `${rows || '<p class="muted">No suggestions yet — checks once a day, or run it now.</p>'}
+    <button class="btn ghost" hx-post="/reflect/run" hx-target="#reflect" hx-swap="innerHTML">Reflect now</button>`;
 }
 
 // A real page at its own URL (GET /log), not a fragment bolted into the SPA —
@@ -933,7 +988,7 @@ function sameOrigin(req: Request): boolean {
   return true; // no Origin/Referer → not a browser CSRF vector
 }
 
-Bun.serve({
+const server = Bun.serve({
   hostname: "127.0.0.1",
   port: PORT,
   idleTimeout: 0, // keep SSE connections open
@@ -1161,6 +1216,15 @@ Bun.serve({
         case "/schedule/delete":
           saveSchedule(loadSchedule().filter((t) => t.id !== b.id));
           return html(scheduleFragment());
+        case "/reflect/approve":
+          approveProposal(String(b.id));
+          return html(reflectFragment());
+        case "/reflect/reject":
+          rejectProposal(String(b.id));
+          return html(reflectFragment());
+        case "/reflect/run":
+          runReflection(4);
+          return html(reflectFragment());
         case "/failures/clear":
           clearFailures();
           return html(failuresFragment());
@@ -1208,6 +1272,7 @@ Bun.serve({
       if (p === "/settings") return html(settingsFragment());
       if (p === "/memory") return html(memoryFragment());
       if (p === "/schedule") return html(scheduleFragment());
+      if (p === "/reflect") return html(reflectFragment());
       if (p === "/failures") return html(failuresFragment());
       if (p === "/roots") return html(rootsFragment());
       if (p === "/allowed") return html(allowedFragment());
@@ -1262,3 +1327,21 @@ try {
 } catch {
   /* headless / no browser */
 }
+
+// Node/Bun exit immediately on SIGINT/SIGTERM by default — but registering a
+// handler (as below) opts OUT of that default, so we must call process.exit()
+// ourselves once cleanup is done. Skipping that step is exactly what leaves a
+// stdio MCP server's child process running after Ctrl+C: on Windows that
+// orphan keeps the console's process group alive, so the shell never gets
+// control back (the "Terminate batch job (Y/N)?" hang).
+let shuttingDown = false;
+async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  clearInterval(schedulerTimer);
+  server.stop(true); // true: drop open connections (SSE) instead of waiting on them
+  await closeMcpClients();
+  process.exit(0);
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
