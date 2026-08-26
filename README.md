@@ -46,7 +46,8 @@ bun start          # builds the frontend, then opens http://127.0.0.1:8787
 - **Reads and writes files**, runs shell/PowerShell commands, and searches or browses the web — each capability can be switched off independently in Settings.
 - **Renders rich replies**: images and galleries, video, tables, charts, metric cards, progress bars, Mermaid diagrams, and maps with directions.
 - **Shows your own local files** inline, from folders you explicitly allow.
-- **Remembers** durable facts about you across sessions.
+- **Remembers** durable facts about you across sessions, as plain markdown files you can read yourself — no vector store, no embeddings.
+- **Learns from repetition** — a daily pass over its own activity log drafts a memory or a reusable Flow for anything you keep doing by hand; nothing saves without your approval.
 - **Schedules tasks** that fire while adhd is open, with desktop notifications.
 - **Builds visual Flows** — reusable workflows you wire up once, then run from chat, on a schedule, or with a button.
 - **Tracks its own progress** on multi-step tasks with a visible, ticking checklist.
@@ -96,6 +97,16 @@ A **Flow** is a workflow you draw on a canvas, open from the **Flows** button �
 Each node passes its output to the next; `{{prev}}` in a field is replaced by it, and `{{key}}` reads back any earlier node you gave that output key. Branches that fan out run in parallel; a **Merge** node fans them back in. A run can be paused, resumed, or stopped mid-flight, and a 30-step cap stops any accidental cycle.
 
 Three ways to run one: the **Run** button, asking in chat, or scheduling it (Settings → Schedule, prompt `flow:<id>`). A few example Flows are seeded once on first launch — delete them and they stay deleted.
+
+## Memory
+
+Memory is a folder of plain markdown files at `~/.adhd/memory/` — one file per fact ("concept"), YAML frontmatter plus a markdown body, [OKF](https://okf.md/spec/)-shaped. No vector store, no embeddings, no approximate retrieval to trust: every system prompt gets the full list of what adhd knows (id + one-line description), and `recall` pulls one in whole when it's actually relevant. What you can open in a text editor is exactly what the model reasons over.
+
+Every `remember`/`recall` write is also a git commit — `~/.adhd/memory/` is its own local git repo, created on first save, scoped to that folder only. A memory overwriting an old fact doesn't lose it: run `git log` / `git show` inside that folder whenever you actually need to see how something changed. Nothing diffs or surfaces automatically — the history is just there when you go looking for it.
+
+### Reflect
+
+Once a day (or on demand, from **Settings → Reflect**), adhd scans its own activity log for things that keep repeating — the same few tool calls in a row, or the same topic coming up across your prompts — and drafts either a memory or a reusable Flow for it. Pure frequency counting; no model call in the scan itself. Every draft sits in **Settings → Reflect** until you approve or reject it — reject one and it's never proposed again.
 
 ## Permissions
 
@@ -148,7 +159,7 @@ Merged from `~/.adhd/config.json`, then `./.adhd/config.json` (project wins). Ev
 |------|------|
 | `secrets.json` | API keys |
 | `config.json` | the settings above |
-| `memory/` | durable memories |
+| `memory/` | durable memories (markdown, its own git repo — see [Memory](#memory)) |
 | `schedule.json` | scheduled tasks |
 | `flows.json` | saved Flows |
 | `tools/<name>.ts` | your custom tools |
@@ -172,6 +183,7 @@ One Bun process serves the UI over SSE and runs the agent in-process — no sepa
 - **`src/flows.ts`** — the Flow graph runner.
 - **`src/mcp.ts`** — connects to MCP servers and exposes their tools, approval-gated.
 - **`src/memory.ts`**, **`src/skills.ts`**, **`src/scheduler.ts`**, **`src/subagent.ts`**, **`src/loop.ts`** — memory, skills, scheduling, subagents, and multi-pass tasks.
+- **`src/reflect.ts`** — the daily pass that mines `src/toollog.ts`'s activity log for repetition and drafts memory/Flow proposals.
 - **`src/sanitize.ts`** — strips injection vectors before content reaches the model or the UI.
 
 The server only accepts loopback `Host` headers (no DNS rebinding), requires state-changing requests to be same-origin (CSRF), and serves local files only from folders you've allowed, under a locked-down CSP.

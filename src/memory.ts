@@ -1,8 +1,12 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync, unlinkSync } from "node:fs";
 import { join, dirname, relative, resolve, sep } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { tool, type Tool } from "ai";
 import { z } from "zod";
 import { HOME_ROOT } from "./config.js";
+
+const execFileAsync = promisify(execFile);
 
 // Memory is stored as an OKF bundle (https://okf.md/spec/): one markdown
 // "concept" file per memory, YAML frontmatter (required `type`), body is
@@ -91,6 +95,44 @@ export function memoryPromptSection(mems: Memory[]): string {
   return `\n\nYour memory (call recall with the id to load full detail; call remember to save durable facts):\n${lines}`;
 }
 
+// --- git-backed history -------------------------------------------------
+// Memory is a folder of markdown, not a vector index — the whole point is that
+// what's on disk is what the model reasons over, no embedding drift to trust.
+// But a plain writeFileSync overwrite loses whatever the fact used to say the
+// moment it changes. Making the bundle its own git repo fixes that for free:
+// every save/delete becomes a commit, so "how did this change" is a `git log`
+// / `git show` in ~/.adhd/memory away when you actually need it — nothing
+// diffs or surfaces history unless you go look. Best-effort throughout: no
+// git binary, a repo that failed to init, a concurrent commit racing another
+// — none of that should ever block a memory save.
+let repoReady: Promise<void> | null = null;
+
+async function runGit(args: string[]): Promise<void> {
+  try {
+    await execFileAsync("git", args, { cwd: MEMORY_DIR });
+  } catch {
+    /* no git installed, nothing staged, or some other non-fatal case */
+  }
+}
+
+function ensureMemoryRepo(): Promise<void> {
+  if (!repoReady) {
+    repoReady = (async () => {
+      mkdirSync(MEMORY_DIR, { recursive: true });
+      if (!existsSync(join(MEMORY_DIR, ".git"))) await runGit(["init", "-q"]);
+    })();
+  }
+  return repoReady;
+}
+
+// Scoped via -c, not a global git config write — this identity only applies to
+// commits inside adhd's own memory repo, never the user's project.
+async function commitMemory(message: string): Promise<void> {
+  await ensureMemoryRepo();
+  await runGit(["add", "-A"]);
+  await runGit(["-c", "user.name=adhd", "-c", "user.email=adhd@localhost", "commit", "-q", "-m", message]);
+}
+
 // Prepend a dated entry to log.md, newest-first. ponytail: dedups today's header only.
 function appendLog(action: "Create" | "Update", id: string, description: string) {
   const path = join(MEMORY_DIR, "log.md");
@@ -131,6 +173,7 @@ export function saveMemory(m: {
     }),
   );
   appendLog(existed ? "Update" : "Create", m.id, m.description);
+  void commitMemory(`${existed ? "Update" : "Create"} ${m.id}: ${m.description}`);
   return { ok: true, existed, message: `${existed ? "updated" : "saved"} memory ${m.id}` };
 }
 
@@ -139,6 +182,7 @@ export function deleteMemory(id: string): { ok: boolean; message: string } {
   if (!file) return { ok: false, message: `invalid memory id "${id}"` };
   if (!existsSync(file) || !statSync(file).isFile()) return { ok: false, message: `no memory "${id}"` };
   unlinkSync(file);
+  void commitMemory(`Delete ${id}`);
   return { ok: true, message: `deleted memory ${id}` };
 }
 
