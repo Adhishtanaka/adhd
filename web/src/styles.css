@@ -118,7 +118,14 @@ body { overflow-x: hidden; background-color: rgb(var(--c-bg)); background-image:
 .md code { font-family: var(--font-mono); background: rgb(var(--c-surface)); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.9em; }
 .md pre { background: rgb(var(--c-surface)); padding: 0.85rem; border-radius: 10px; overflow-x: auto; border: 1px solid rgb(var(--c-border)); position: relative; }
 .md pre code { background: none; padding: 0; }
-.md table { border-collapse: collapse; width: 100%; } .md td, .md th { border: 1px solid rgb(var(--c-border)); padding: 0.35rem 0.6rem; text-align: left; }
+/* overflow-x:auto turns the table itself into a scroll container — same trick
+   .md pre already uses for code blocks — so a table too wide for the transcript
+   column scrolls in place instead of silently clipping (the page's own
+   overflow-x is hidden, so without this the overflow just vanished off-screen).
+   Cells wrap by default now too, so that scroll is only ever needed for the
+   rare single unbreakable token (a long path, a URL) rather than every table. */
+.md table { overflow-x: auto; border-collapse: collapse; width: 100%; }
+.md td, .md th { border: 1px solid rgb(var(--c-border)); padding: 0.35rem 0.6rem; text-align: left; overflow-wrap: anywhere; }
 .md blockquote { border-left: 2px solid rgb(var(--c-accent-2)); padding-left: 0.8rem; color: rgb(var(--c-text-dim)); }
 /* content-card frame — plain neutral surface, no colored rail */
 .frame { border: 1px solid rgb(var(--c-border)); border-radius: 12px; background: rgb(var(--c-surface)); padding: 0.75rem; }
