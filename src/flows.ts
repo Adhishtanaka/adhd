@@ -7,6 +7,7 @@ import { z } from "zod";
 import { HOME_ROOT } from "./config.js";
 import { cap, asPreApproved } from "./tools.js";
 import { loadMemories } from "./memory.js";
+import { awaitJob, backgroundedJobId } from "./jobs.js";
 
 // A flow is a saved graph the user drew on the canvas. Nodes/edges are stored in
 // React Flow's OWN shape so the page round-trips them with no mapping code —
@@ -608,7 +609,16 @@ export function flowRunner(opts: {
           if (parsed && !parsed.success)
             throw new Error(`bad arguments for ${name}: ${parsed.error.issues.map((i: any) => `${i.path.join(".") || "?"} ${i.message}`).join("; ")}`);
           // Pre-approved: running the flow WAS the approval (see asPreApproved).
-          return cap(String(await asPreApproved(() => t.execute!(parsed ? parsed.data : filled, {} as any))));
+          const out = String(await asPreApproved(() => t.execute!(parsed ? parsed.data : filled, {} as any)));
+          // A slow tool (bash, web_search, ...) hits withDeadline's own timeout
+          // and hands back a placeholder telling a CHAT model to end its turn
+          // and wait for the real answer as a later turn — there's no such
+          // turn here, so taking that placeholder as `out` would feed the next
+          // node "still running, don't retry" instead of the tool's real
+          // output. Wait for the job to actually land instead.
+          const jobId = backgroundedJobId(out);
+          const waited = jobId ? awaitJob(jobId) : null;
+          return cap(waited ? await waited : out);
         },
       },
       emit,

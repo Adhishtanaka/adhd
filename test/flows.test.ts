@@ -14,6 +14,7 @@ import {
   type FlowEvent,
 } from "../src/flows.js";
 import { builtinTools, confirmAction, setBashConfirm } from "../src/tools.js";
+import { withDeadline } from "../src/jobs.js";
 import { dynamicTool, jsonSchema, tool } from "ai";
 import { z } from "zod";
 
@@ -524,4 +525,28 @@ test("a tool node runs without raising a permission card", async () => {
   const out = await flowRunner({ models: [], tools: { needs_ok } })(flow);
   expect(out).toBe("ran");
   expect(asked).toBe(0);
+});
+
+// The reported bug: a slow tool (bash, web_search, ...) blows withDeadline's
+// timeout and hands back a placeholder telling a CHAT model to end its turn
+// and wait for the real answer as a later turn. A flow has no such turn to
+// come back on, so the node must wait for the real result instead of feeding
+// "still running, don't retry" to whatever comes next.
+test("a tool node waits out a slow tool instead of forwarding the backgrounded placeholder", async () => {
+  const slow = tool({
+    description: "a tool that blows withDeadline's timeout",
+    inputSchema: z.object({}),
+    execute: async () => withDeadline("slow", 10, () => new Promise((r) => setTimeout(() => r("the real answer"), 40))),
+  });
+  const flow: Flow = {
+    id: "f",
+    name: "f",
+    nodes: [
+      { id: "a", type: "start", position: { x: 0, y: 0 }, data: {} },
+      { id: "b", type: "tool", position: { x: 0, y: 1 }, data: { tool: "slow", args: {} } },
+    ],
+    edges: [{ source: "a", target: "b" }],
+  };
+  const out = await flowRunner({ models: [], tools: { slow } })(flow);
+  expect(out).toBe("the real answer");
 });

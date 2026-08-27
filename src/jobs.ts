@@ -26,10 +26,35 @@ export function runningJobs(): { id: string; label: string }[] {
   return [...running].map(([id, label]) => ({ id, label }));
 }
 
+// A caller that isn't a chat turn — a flow, say, which has no model in the loop
+// to read "end your turn now" and come back later — can't use the backgrounded
+// placeholder as a real answer. awaitJob lets it opt back into waiting for the
+// actual result instead, keyed off the same id the placeholder text carries.
+const waiters = new Map<string, ((result: string) => void)[]>();
+// null = `id` isn't a job currently in flight (already delivered, or never
+// existed) — nothing for the caller to await.
+export function awaitJob(id: string): Promise<string> | null {
+  if (!running.has(id)) return null;
+  return new Promise((resolve) => {
+    const arr = waiters.get(id) ?? [];
+    arr.push(resolve);
+    waiters.set(id, arr);
+  });
+}
+
+// Pulls the job id out of withDeadline's backgrounded-placeholder text — the
+// one thing a caller like a flow needs from it, without hardcoding the id's
+// `job${n}` shape at every call site.
+const BACKGROUNDED = /moved to the background as (job\d+)/;
+export function backgroundedJobId(text: string): string | null {
+  return BACKGROUNDED.exec(text)?.[1] ?? null;
+}
+
 // Reset between tests; not used by the app.
 export function _resetJobs(): void {
   seq = 0;
   running.clear();
+  waiters.clear();
 }
 
 const TIMED_OUT = Symbol("timed-out");
@@ -62,6 +87,11 @@ export async function withDeadline(label: string, ms: number, work: () => Promis
   void settled.then((result) => {
     running.delete(id);
     onFinish({ id, label, result, seconds: Math.round((Date.now() - started) / 1000) });
+    const w = waiters.get(id);
+    if (w) {
+      waiters.delete(id);
+      for (const resolve of w) resolve(result);
+    }
   });
   return (
     `Still running after ${Math.round(ms / 1000)}s — moved to the background as ${id} ("${label}"). ` +
