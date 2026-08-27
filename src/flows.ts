@@ -58,7 +58,16 @@ export function normalize(flow: Flow): Flow {
         ? n
         : { ...n, position: { x: 60 + (i % 5) * 220, y: 80 + Math.floor(i / 5) * 140 } },
     ),
-    edges: (flow.edges ?? []).filter((e) => e?.source && e?.target),
+    // Same idea as the position backfill above: an edge written by hand, by an
+    // agent's write_file, or by an older adhd (the example flows shipped without
+    // one for a while) has no `id`. React Flow keys its edge list by `id` and
+    // silently fails to draw one that's missing it — the graph LOOKS
+    // disconnected even though the runner (which only ever reads source/target)
+    // executes it correctly. `sourceHandle` rides along so a branch (if/switch)
+    // keeps its distinct id per handle instead of colliding on one `source-target`.
+    edges: (flow.edges ?? [])
+      .filter((e) => e?.source && e?.target)
+      .map((e) => (e.id ? e : { ...e, id: `${e.source}-${e.target}${e.sourceHandle ? `-${e.sourceHandle}` : ""}` })),
   };
 }
 
@@ -94,10 +103,10 @@ export const EXAMPLE_FLOWS: Flow[] = [
       { id: "e", type: "end", position: at(890, 160), data: {} },
     ],
     edges: [
-      { source: "s", target: "search" },
-      { source: "search", target: "sum" },
-      { source: "sum", target: "save" },
-      { source: "save", target: "e" },
+      { id: "s-search", source: "s", target: "search" },
+      { id: "search-sum", source: "search", target: "sum" },
+      { id: "sum-save", source: "sum", target: "save" },
+      { id: "save-e", source: "save", target: "e" },
     ],
   },
   {
@@ -112,12 +121,12 @@ export const EXAMPLE_FLOWS: Flow[] = [
       { id: "e", type: "end", position: at(920, 200), data: {} },
     ],
     edges: [
-      { source: "s", target: "w" },
-      { source: "w", target: "q" },
-      { source: "q", target: "y", sourceHandle: "yes" },
-      { source: "q", target: "n", sourceHandle: "no" },
-      { source: "y", target: "e" },
-      { source: "n", target: "e" },
+      { id: "s-w", source: "s", target: "w" },
+      { id: "w-q", source: "w", target: "q" },
+      { id: "q-y-yes", source: "q", target: "y", sourceHandle: "yes" },
+      { id: "q-n-no", source: "q", target: "n", sourceHandle: "no" },
+      { id: "y-e", source: "y", target: "e" },
+      { id: "n-e", source: "n", target: "e" },
     ],
   },
   {
@@ -131,10 +140,10 @@ export const EXAMPLE_FLOWS: Flow[] = [
       { id: "e", type: "end", position: at(890, 160), data: {} },
     ],
     edges: [
-      { source: "s", target: "read" },
-      { source: "read", target: "todo" },
-      { source: "todo", target: "write" },
-      { source: "write", target: "e" },
+      { id: "s-read", source: "s", target: "read" },
+      { id: "read-todo", source: "read", target: "todo" },
+      { id: "todo-write", source: "todo", target: "write" },
+      { id: "write-e", source: "write", target: "e" },
     ],
   },
 ];

@@ -499,6 +499,25 @@ test("normalize leaves a hand-placed position alone and drops broken edges", asy
   expect(out.edges).toHaveLength(1); // the two half-connected edges are gone
 });
 
+// The reported bug: a flow written by hand, by write_file, or shipped as one of
+// the seeded examples had edges with no `id` — React Flow keys its edge list by
+// id and silently fails to draw one that's missing it, so the graph LOOKED
+// disconnected even though the runner (source/target only) ran it fine.
+test("normalize backfills a missing edge id and leaves an existing one alone", async () => {
+  const { normalize } = await import("../src/flows.js");
+  const out = normalize({
+    id: "f",
+    name: "f",
+    nodes: [node("a", "if", { question: "q" }), node("b", "prompt", {}), node("c", "prompt", {})],
+    edges: [
+      { source: "a", target: "b", sourceHandle: "yes" } as any, // no id, has a handle
+      { id: "kept", source: "a", target: "c", sourceHandle: "no" } as any, // already has one
+    ],
+  });
+  expect(out.edges[0].id).toBe("a-b-yes");
+  expect(out.edges[1].id).toBe("kept"); // untouched, not recomputed from source/target
+});
+
 // The reported bug: a flow with a shell/script step stopped mid-run behind a
 // permission card — including scheduled runs, where nobody is there to click it.
 // Drawing the flow and hitting Run IS the approval.
