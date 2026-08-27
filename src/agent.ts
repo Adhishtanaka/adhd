@@ -1,6 +1,7 @@
 import { streamText, generateText, stepCountIs, type Tool, type ModelMessage } from "ai";
 import type { LanguageModel } from "ai";
-import { cap } from "./tools.js";
+import { cap, withTurnGrants } from "./tools.js";
+import { LoopDetector, type LoopHit } from "./loopdetect.js";
 
 export type AgentEvent =
   | { type: "text"; delta: string }
@@ -338,7 +339,8 @@ export function createAgent(opts: {
       compactions = 0;
       pruned = 0;
     },
-    async send(userText, onEvent) {
+    send: (userText, onEvent) =>
+      withTurnGrants(async () => {
       const mark = history.length; // roll back to here if the turn errors with no progress
       history.push({ role: "user", content: userText });
       await compact(onEvent);
@@ -347,8 +349,26 @@ export function createAgent(opts: {
       // fills it as each step finishes, so it survives a mid-turn model switch or
       // retry — the next attempt replays it as context instead of re-running tools.
       const pendingTurn: ModelMessage[] = [];
+      // Counts EITHER kind of loop hit across the whole turn (spanning retries):
+      // the first hit nudges the model with a reminder and retries; a second
+      // means the nudge didn't work, so the turn stops instead of trying again.
+      let loopStrikes = 0;
+
+      const loopReminder = (hit: LoopHit, escalate: boolean): ModelMessage => ({
+        role: "user",
+        content: escalate
+          ? "[loop-detector] You've repeated yourself twice now this turn. Stop — briefly summarize what you were trying to do and ask the user how to proceed."
+          : hit.kind === "tool-call"
+            ? `[loop-detector] You're repeating ${hit.sample} — the same tool call, back to back. Stop calling it and ask the user for guidance instead of repeating it.`
+            : `[loop-detector] You appear to be repeating the same text ("${hit.sample.slice(0, 60)}"). Stop, briefly explain what you were trying to do, and ask the user for guidance instead of continuing.`,
+      });
 
       for (let attempt = 0; ; attempt++) {
+        // Fresh detector per attempt — each retry is a brand-new generation, so
+        // a false match against the PREVIOUS (aborted) attempt's tail can't occur.
+        const detector = new LoopDetector();
+        const controller = new AbortController();
+        let charLoopHit: LoopHit | null = null;
         try {
           const result = streamText({
             model: models[modelIdx],
@@ -356,8 +376,25 @@ export function createAgent(opts: {
             tools,
             stopWhen: stepCountIs(12),
             messages: [...history, ...pendingTurn],
+            abortSignal: controller.signal,
             maxRetries: 0, // we handle rate-limit retries/fallback ourselves
             onError: () => {}, // errors reach the user via the stream; don't let the SDK's default dump them over the TUI
+            // Fires between steps — the only place a repeating TOOL CALL can be
+            // caught, since adhd's tools don't observe abortSignal internally
+            // (e.g. bash's execAsync), so aborting mid-call would just orphan
+            // the result rather than actually stop it.
+            prepareStep: ({ steps, messages }) => {
+              const call = steps.at(-1)?.toolCalls?.[0] as { toolName: string; input: unknown } | undefined;
+              if (!call) return undefined;
+              const hit = detector.feedToolCall(call.toolName, JSON.stringify(call.input));
+              if (!hit) return undefined;
+              loopStrikes++;
+              onEvent({ type: "info", message: `loop detected (repeated ${call.toolName} call) — nudging the model to stop` });
+              const escalate = loopStrikes >= 2;
+              return escalate
+                ? { activeTools: [], messages: [...messages, loopReminder(hit, true)] }
+                : { messages: [...messages, loopReminder(hit, false)] };
+            },
             onStepFinish: ({ response, usage }) => {
               pendingTurn.push(...response.messages);
               const total = usage?.totalTokens ?? (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
@@ -367,9 +404,12 @@ export function createAgent(opts: {
           let streamError: unknown = null;
           for await (const part of result.fullStream) {
             switch (part.type) {
-              case "text-delta":
-                onEvent({ type: "text", delta: (part as any).text });
+              case "text-delta": {
+                const delta = (part as any).text;
+                onEvent({ type: "text", delta });
+                charLoopHit = detector.feedText(delta);
                 break;
+              }
               case "tool-call":
                 onEvent({ type: "tool-call", id: part.toolCallId, name: part.toolName, args: (part as any).input });
                 break;
@@ -381,8 +421,24 @@ export function createAgent(opts: {
                 streamError = (part as any).error;
                 break;
             }
+            if (charLoopHit) {
+              controller.abort(); // stop the in-flight generation — text can't be un-said otherwise
+              break;
+            }
           }
-          void Promise.resolve(result.response).catch(() => {}); // avoid unhandled rejection
+          void Promise.resolve(result.response).catch(() => {}); // avoid unhandled rejection (incl. from the abort above)
+          if (charLoopHit) {
+            loopStrikes++;
+            onEvent({ type: "info", message: "loop detected (repeated text) — nudging the model to stop" });
+            if (loopStrikes >= 2) {
+              if (pendingTurn.length) history.push(...pendingTurn);
+              onEvent({ type: "error", message: "stopped: the model repeated itself twice this turn" });
+              onEvent({ type: "context", stats: stats() });
+              return;
+            }
+            pendingTurn.push(loopReminder(charLoopHit, false));
+            continue;
+          }
           if (streamError) throw streamError;
           history.push(...pendingTurn);
           onEvent({ type: "context", stats: stats() });
@@ -414,6 +470,6 @@ export function createAgent(opts: {
           return;
         }
       }
-    },
+      }),
   };
 }

@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { tool, type Tool } from "ai";
 import { z } from "zod";
-import { ROOTS, HOME_ROOT, allowedRoots, isUnderRoots, isUnderRootsForWrite, allowedCommands, permissionMode } from "./config.js";
+import { ROOTS, HOME_ROOT, allowedRoots, isUnderRoots, isUnderRootsForWrite, allowedCommands, deniedCommands, permissionMode } from "./config.js";
 import { isBadDomain, domainOf } from "./failcache.js";
 import { withDeadline } from "./jobs.js";
 import { guardUntrustedContent } from "./security.js";
@@ -38,6 +38,10 @@ const execFileAsync = promisify(execFile);
 // Wired by the agent at startup. Default: deny (safe when running headless).
 export type ConfirmReq = { command: string; explain?: string; allowKey?: string | null; dangerReason?: string };
 export type Confirm = (req: ConfirmReq) => Promise<boolean>;
+// How a confirm card can be resolved. "allow-turn" and "deny-always" sit
+// between the original two: a grant that only lasts this task, and a refusal
+// that (like "always") is remembered so the same thing isn't asked again.
+export type ConfirmResolution = "allow-once" | "allow-turn" | "allow-always" | "deny-always";
 let confirmBash: Confirm = async () => false;
 export function setBashConfirm(fn: Confirm) {
   confirmBash = fn;
@@ -50,6 +54,19 @@ export function setBashConfirm(fn: Confirm) {
 const autoApprove = new AsyncLocalStorage<true>();
 export const asPreApproved = <T>(fn: () => Promise<T>): Promise<T> => autoApprove.run(true, fn);
 const preApproved = (): boolean => autoApprove.getStore() === true;
+
+// "Allow for this task" grants — narrower than allowedCommands (permanent) but
+// wider than a single call: they last for the current turn only. A fresh Set
+// per turn (see agent.ts's withTurnGrants) means redirecting the conversation
+// can't keep an old grant alive. Same ALS pattern as autoApprove above, kept
+// separate because the two mean different things (pre-approved vs. granted
+// mid-turn by a human clicking "allow for this task").
+const turnGrants = new AsyncLocalStorage<Set<string>>();
+export const withTurnGrants = <T>(fn: () => Promise<T>): Promise<T> => turnGrants.run(new Set(), fn);
+export function currentTurnGrants(): Set<string> | undefined {
+  return turnGrants.getStore();
+}
+const turnGranted = (key: string): boolean => turnGrants.getStore()?.has(key) ?? false;
 
 // Reuse the same prompt for any action that needs approval (e.g. loop_task).
 // `trusted` marks a caller that would normally skip the prompt (an MCP server
@@ -106,18 +123,20 @@ export function allowKeyFor(runner: string, command: string): string | null {
 }
 
 // One gate for bash/powershell: skip the prompt if this program was already
-// blanket-approved, otherwise ask.
+// blanket-approved or denied, otherwise ask.
 async function approve(runner: string, command: string, explain?: string): Promise<boolean> {
   const mode = permissionMode();
   const dangerReason = dangerousCommandReason(command);
   if (!dangerReason && (mode === "auto" || preApproved())) return true;
   const allowKey = allowKeyFor(runner, command);
-  // "ask" ignores the always-allow list — the whole point of that mode is that
-  // nothing runs unseen, including things you approved on a calmer day. The
-  // card also drops its "always allow" button, so a click can't re-arm it.
+  // "ask" ignores the always-allow/never lists — the whole point of that mode
+  // is that nothing runs unseen, including things decided on a calmer day. The
+  // card also drops its "always allow"/"never" buttons, so a click can't re-arm
+  // or re-block silently.
   if (dangerReason) return confirmBash({ command, explain, allowKey: null, dangerReason });
   if (mode === "ask") return confirmBash({ command, explain, allowKey: null });
-  if (allowKey && allowedCommands().includes(allowKey)) return true;
+  if (allowKey && deniedCommands().includes(allowKey)) return false; // "never" — refuse without even prompting
+  if (allowKey && (allowedCommands().includes(allowKey) || turnGranted(allowKey))) return true;
   return confirmBash({ command, explain, allowKey });
 }
 
@@ -252,6 +271,22 @@ export function formatSerper(type: SerperType, r: any): string {
   return rows.join("\n") || `no ${type} results`;
 }
 
+// Tools that write to disk, run code/packages, or trigger a Flow (whose own
+// tool nodes can mutate with no further check) — stripped from a spawn_agent
+// call made with readonly:true (see subagent.ts). Everything else in
+// builtinTools() only reads or looks things up.
+export const MUTATING_TOOLS = new Set([
+  "write_file",
+  "bash",
+  "powershell",
+  "run_script",
+  "run_python",
+  "run_node",
+  "pip_install",
+  "npm_install",
+  "run_flow",
+]);
+
 export function builtinTools(): Record<string, Tool> {
   const t: Record<string, Tool> = {
     read_file: tool({
@@ -273,7 +308,10 @@ export function builtinTools(): Record<string, Tool> {
         if (start > lines.length) return `"${path}" has ${lines.length} lines — offset ${start} is past the end.`;
         const end = Math.min(lines.length, start - 1 + (limit ?? DEFAULT_READ_LINES));
         const window = lines.slice(start - 1, end).join("\n");
-        return cap(`[lines ${start}-${end} of ${lines.length}]\n${window}`);
+        // A local file is no more inherently trustworthy than a scraped web page
+        // (a downloaded document, a cloned repo's README, an exported email) —
+        // same guard as web_search/browser/MCP results below.
+        return guardUntrustedContent(path, cap(`[lines ${start}-${end} of ${lines.length}]\n${window}`));
       },
     }),
     write_file: tool({

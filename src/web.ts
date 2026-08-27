@@ -3,12 +3,12 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { marked } from "marked";
 import { buildAgent } from "./setup.js";
-import { setBashConfirm, setAskUser, orAfter } from "./tools.js";
+import { setBashConfirm, setAskUser, orAfter, currentTurnGrants, type ConfirmResolution } from "./tools.js";
 import { setSubagentSink } from "./subagent.js";
 import { setRenderSink, setTurnKey, carriesAnswer, type Spec } from "./render.js";
 import { sanitize } from "./sanitize.js";
 import { listFailures, clearFailures, removeDomain } from "./failcache.js";
-import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, mcpServers, setMcpServers, setCustomBaseURL, loadConfig, capabilities, setCapabilities, permissionMode, setPermissionMode, disabledTools, setDisabledTools, splitSpec, PROVIDER_KEY, CAPABILITIES, type Capabilities, type KeyName } from "./config.js";
+import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, deniedCommands, setDeniedCommands, mcpServers, setMcpServers, setCustomBaseURL, loadConfig, capabilities, setCapabilities, permissionMode, setPermissionMode, disabledTools, setDisabledTools, splitSpec, PROVIDER_KEY, CAPABILITIES, type Capabilities, type KeyName } from "./config.js";
 import { setJobSinks, type FinishedJob } from "./jobs.js";
 import { loadMemories, saveMemory, deleteMemory } from "./memory.js";
 import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./scheduler.js";
@@ -148,6 +148,11 @@ const pending = new Map<string, (v: unknown) => void>();
 // token → the allowKey this prompt may grant. Kept server-side so "always allow"
 // can only ever store the key WE derived, not whatever the page posts back.
 const pendingAllowKey = new Map<string, string>();
+// token → the live turn's grant Set, captured BY REFERENCE at prompt-creation
+// time. /confirm arrives as a fresh HTTP request with no ambient AsyncLocalStorage
+// context, so this is what lets "allow for this task" reach back into the turn
+// that's still awaiting this very prompt.
+const pendingTurnGrant = new Map<string, Set<string>>();
 
 // A prompt nobody answers must not hold the turn open forever. An unattended run
 // (a scheduled task, a Flow) broadcasts its confirm to whatever SSE clients exist
@@ -164,14 +169,22 @@ const APPROVAL_TIMEOUT = 5 * 60_000;
 function expire(token: string, note: string): void {
   pending.delete(token);
   pendingAllowKey.delete(token);
+  pendingTurnGrant.delete(token);
   broadcast("info", { message: note });
 }
 
 setBashConfirm(({ command, explain, allowKey, dangerReason }) => {
   const token = crypto.randomUUID();
+  // Captured now, while we're still nested inside the live turn's
+  // withTurnGrants scope (approve() → confirmBash() → here, all synchronous
+  // down to this callback) — see pendingTurnGrant's comment above for why.
+  const grantSet = currentTurnGrants();
   const answered = new Promise<boolean>((resolve) => {
     pending.set(token, (v) => resolve(!!v));
-    if (allowKey) pendingAllowKey.set(token, allowKey);
+    if (allowKey) {
+      pendingAllowKey.set(token, allowKey);
+      if (grantSet) pendingTurnGrant.set(token, grantSet);
+    }
     broadcast("confirm", { token, command, explain, allowKey, dangerReason });
   });
   // Unanswered means declined — the same default tools.ts uses when headless.
@@ -1090,13 +1103,32 @@ const server = Bun.serve({
           return noContent();
         }
         case "/confirm": {
-          const ok = b.ok === true || b.ok === "true";
+          // Back-compat: an old client (or a stale open tab) may still post the
+          // original {ok, always} shape — read it as allow-once/allow-always so
+          // neither breaks mid-upgrade.
+          const legacy = typeof b.resolution !== "string";
+          const resolution: ConfirmResolution | undefined = legacy
+            ? (b.ok === true || b.ok === "true"
+                ? b.always === true || b.always === "true"
+                  ? "allow-always"
+                  : "allow-once"
+                : undefined)
+            : (b.resolution as ConfirmResolution);
           const key = pendingAllowKey.get(b.token);
-          if (ok && (b.always === true || b.always === "true") && key)
+          const ok = resolution === "allow-once" || resolution === "allow-turn" || resolution === "allow-always";
+          if (key && resolution === "allow-always") {
             setAllowedCommands([...new Set([...allowedCommands(), key])]);
+            setDeniedCommands(deniedCommands().filter((k) => k !== key));
+          }
+          if (key && resolution === "allow-turn") pendingTurnGrant.get(b.token)?.add(key);
+          if (key && resolution === "deny-always") {
+            setDeniedCommands([...new Set([...deniedCommands(), key])]);
+            setAllowedCommands(allowedCommands().filter((k) => k !== key));
+          }
           pending.get(b.token)?.(ok);
           pending.delete(b.token);
           pendingAllowKey.delete(b.token);
+          pendingTurnGrant.delete(b.token);
           return noContent();
         }
         case "/ask":

@@ -22,6 +22,7 @@ export type Config = {
   systemPrompt?: string;
   localRoots?: string[]; // folders the local-file tools may read (default: home)
   allowedCommands?: string[]; // "always allow" keys, e.g. "bash:git" (see tools.allowKeyFor)
+  deniedCommands?: string[]; // "never" keys, same shape as allowedCommands — checked first
   mcpServers?: Record<string, McpServer>; // stdio MCP servers to load tools from (see mcp.ts)
   browserArgs?: string[]; // override the headless-Chrome launch args (see browser.ts)
   capabilities?: Partial<Capabilities>; // switch whole feature groups off (see below)
@@ -405,6 +406,15 @@ export function allowedCommands(): string[] {
 }
 
 export const setAllowedCommands = (allowedCommands: string[]): void => patchConfig({ allowedCommands });
+
+// --- "never" command list ---------------------------------------------------
+// Symmetric with allowedCommands: same key shape, checked first so a denied
+// command is refused without even prompting.
+export function deniedCommands(): string[] {
+  return loadConfig().deniedCommands ?? [];
+}
+
+export const setDeniedCommands = (deniedCommands: string[]): void => patchConfig({ deniedCommands });
 
 // --- MCP servers ------------------------------------------------------------
 export function mcpServers(): Record<string, McpServer> {

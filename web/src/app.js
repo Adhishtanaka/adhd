@@ -1075,8 +1075,8 @@ function confirmCard(d) {
   c.append(el("eyebrow mt-1", "command"));
   c.append(el("font-mono text-xs whitespace-pre-wrap bg-raise border border-line rounded-lg px-2.5 py-2 text-paper overflow-x-auto", d.command));
 
-  const answer = (ok, always) => {
-    post("/confirm", { token: d.token, ok, always: !!always });
+  const answer = (resolution) => {
+    post("/confirm", { token: d.token, resolution });
     c.remove();
   };
   const btn = (cls, label, fn) => {
@@ -1088,18 +1088,35 @@ function confirmCard(d) {
     return b;
   };
   const btns = el("flex flex-wrap gap-2 pt-1");
-  btns.append(btn(d.dangerReason ? "approve-danger-button" : "bg-paper text-base rounded-full px-3.5 py-1 text-xs cursor-pointer font-medium", d.dangerReason ? "I understand, run once" : "Allow once", () => answer(true, false)));
+  btns.append(btn(d.dangerReason ? "approve-danger-button" : "bg-paper text-base rounded-full px-3.5 py-1 text-xs cursor-pointer font-medium", d.dangerReason ? "I understand, run once" : "Allow once", () => answer("allow-once")));
   // allowKey is null for anything the server won't blanket-approve (shell
-  // operators, run_script) — no "always" button at all in that case.
-  if (d.allowKey)
+  // operators, run_script, a dangerous command) — no allow-turn/always/never
+  // buttons at all in that case, only once/deny.
+  if (d.allowKey) {
+    btns.append(
+      btn(
+        "border border-line text-paper rounded-full px-3.5 py-1 text-xs cursor-pointer hover:border-signal transition-colors",
+        "Allow for this task",
+        () => answer("allow-turn"),
+      ),
+    );
     btns.append(
       btn(
         "border border-line text-paper rounded-full px-3.5 py-1 text-xs cursor-pointer hover:border-signal transition-colors",
         `Always allow ${d.allowKey.split(":")[1]}`,
-        () => answer(true, true),
+        () => answer("allow-always"),
       ),
     );
-  btns.append(btn("border border-line text-dim rounded-full px-3.5 py-1 text-xs cursor-pointer", "Deny", () => answer(false, false)));
+  }
+  btns.append(btn("border border-line text-dim rounded-full px-3.5 py-1 text-xs cursor-pointer", "Deny", () => answer(undefined)));
+  if (d.allowKey)
+    btns.append(
+      btn(
+        "border border-line text-dim rounded-full px-3.5 py-1 text-xs cursor-pointer",
+        `Never allow ${d.allowKey.split(":")[1]}`,
+        () => answer("deny-always"),
+      ),
+    );
   c.append(btns);
   add(c);
 }
