@@ -232,10 +232,18 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
 #chat-area.home #composer { padding-top: 0; }
 #chat-area:not(.home) > footer { border-top: 1px solid rgb(var(--c-border) / .75); background: linear-gradient(to bottom, rgb(var(--c-bg) / .78), rgb(var(--c-bg))); backdrop-filter: blur(18px); }
 
-/* Desktop navigation stays out of the workspace until the left edge is used.
-   focus-within gives keyboard users the same reveal behavior as hover. */
+/* Settings/Flow side rails stay out of the workspace until the left edge is
+   used. focus-within gives keyboard users the same reveal behavior as hover.
+   The main chat nav (.app-sidebar) used to auto-hide the same way, but that
+   read as "the sidebar doesn't stay put" — it's a fixed, always-visible rail
+   on desktop now, matching how it already behaves on mobile. */
 @media (hover: hover) and (min-width: 701px) {
-  .app-sidebar, .settings-page-head, .flow-page-head {
+  .app-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 40; }
+  /* Fixed positioning drops .app-sidebar out of #app-shell's flex flow, so its
+     76px width (see #app-shell > header) has to be reserved by hand or
+     .chat-workspace slides underneath it. */
+  .chat-workspace { margin-left: 76px; }
+  .settings-page-head, .flow-page-head {
     position: fixed;
     inset: 0 auto 0 0;
     z-index: 40;
@@ -243,7 +251,7 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
     box-shadow: none;
     transition: transform .2s cubic-bezier(.2, .75, .25, 1) .12s, box-shadow .2s ease;
   }
-  .app-sidebar::after, .settings-page-head::after, .flow-page-head::after {
+  .settings-page-head::after, .flow-page-head::after {
     content: "";
     position: absolute;
     inset: 0 0 0 auto;
@@ -251,19 +259,17 @@ dialog#lightbox .lb-close { position: absolute; top: -0.75rem; right: -0.75rem; 
     background: linear-gradient(to bottom, transparent calc(50% - 24px), rgb(var(--c-accent) / .42) calc(50% - 24px), rgb(var(--c-accent) / .42) calc(50% + 24px), transparent calc(50% + 24px));
     transition: opacity .15s;
   }
-  .app-sidebar:hover, .app-sidebar:focus-within,
   .settings-page-head:hover, .settings-page-head:focus-within,
   .flow-page-head:hover, .flow-page-head:focus-within {
     transform: translateX(0);
     box-shadow: 10px 0 30px rgb(0 0 0 / .2);
     transition-delay: 0s;
   }
-  .app-sidebar:hover::after, .app-sidebar:focus-within::after,
   .settings-page-head:hover::after, .settings-page-head:focus-within::after,
   .flow-page-head:hover::after, .flow-page-head:focus-within::after { opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .app-sidebar, .settings-page-head, .flow-page-head { transition: none; }
+  .settings-page-head, .flow-page-head { transition: none; }
 }
 
 /* ---- Flow studio: an operational canvas, distinct from the chat. ---- */

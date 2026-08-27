@@ -64,6 +64,10 @@
           <div id="status" class="hidden max-w-3xl w-full mx-auto px-5 pt-2 font-mono text-xs text-dim flex items-center gap-2">
             <svg class="text-dim spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke-dasharray="40 16"/></svg>
             <span id="status-text">thinking</span>
+            <button id="stop-turn" type="button" class="ml-auto flex items-center gap-1 text-dim hover:text-bad transition-colors" title="Stop" aria-label="Stop generating">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+              Stop
+            </button>
           </div>
           <!-- The agent's plan for a multi-step task, above the input where
                you're already looking. Empty for one-shot questions. -->

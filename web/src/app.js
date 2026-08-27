@@ -33,6 +33,7 @@ const connEl = document.getElementById("conn");
 const nokey = document.getElementById("nokey");
 const statusEl = document.getElementById("status");
 const statusText = document.getElementById("status-text");
+const stopBtn = document.getElementById("stop-turn");
 const connectionSnackbar = document.getElementById("connection-snackbar");
 const connectionMessage = document.getElementById("connection-message");
 
@@ -1263,6 +1264,7 @@ msg.addEventListener("input", () => {
   msg.style.height = Math.min(msg.scrollHeight, 160) + "px";
 });
 sendBtn.append(icon("arrow-up")); // header buttons carry their own SVG in index.html
+stopBtn.addEventListener("click", () => post("/chat/stop", {}));
 const panel = document.getElementById("panel");
 window.openSettings = () => {
   panel.classList.remove("hidden");

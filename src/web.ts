@@ -1039,7 +1039,9 @@ function sameOrigin(req: Request): boolean {
   return true; // no Origin/Referer → not a browser CSRF vector
 }
 
-const server = Bun.serve({
+let server: ReturnType<typeof Bun.serve>;
+try {
+server = Bun.serve({
   hostname: "127.0.0.1",
   port: PORT,
   idleTimeout: 0, // keep SSE connections open
@@ -1138,6 +1140,15 @@ const server = Bun.serve({
           void runTurn(message, sessionFor(req));
           return noContent();
         }
+        // Abort the in-flight turn, if there is one. `active` is whichever
+        // session's turn is running — same one runTurn() and every tool sink
+        // route through — so this reaches it regardless of which browser tab
+        // posted here. A no-op (not an error) once nothing is running: the
+        // button that calls this hides itself the moment `busy` flips false,
+        // but a click already in flight when that happens must not 409.
+        case "/chat/stop":
+          if (busy && active) active.agent.stop();
+          return noContent();
         case "/confirm": {
           // Back-compat: an old client (or a stale open tab) may still post the
           // original {ok, always} shape — read it as allow-once/allow-always so
@@ -1418,6 +1429,15 @@ const server = Bun.serve({
     return new Response("not found", { status: 404 });
   },
 });
+} catch (e) {
+  const link = `http://127.0.0.1:${PORT}`;
+  if ((e as { code?: string }).code === "EADDRINUSE") {
+    console.error(`adhd is already running at ${link} — open that in your browser, or set ADHD_PORT to run a second instance.`);
+  } else {
+    console.error(`adhd failed to start: ${(e as Error).message ?? e}`);
+  }
+  process.exit(1);
+}
 
 const link = `http://127.0.0.1:${PORT}`;
 console.log(`adhd web UI → ${link}${built.hasKey() ? "" : "   (add your DeepSeek key in Settings to start)"}`);

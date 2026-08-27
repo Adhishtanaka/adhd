@@ -71,6 +71,7 @@ export type Agent = {
   stats(): ContextStats; // current occupancy, for the strip + /state
   compact(onEvent: (e: AgentEvent) => void): Promise<void>; // force a pass now (/compact)
   reset(): void; // clear conversation history (new chat)
+  stop(): void; // abort the in-flight send(), if any (no-op otherwise)
 };
 
 // Keep requests small — raw tool output (web pages, file dumps) piles up fast,
@@ -251,6 +252,10 @@ export function createAgent(opts: {
   let modelIdx = 0;
   let models = opts.models; // mutable so /model can hot-swap without losing history
   let tools = opts.tools; // mutable so capability toggles apply on the next turn
+  // The in-flight attempt's controller, so an external stop() can reach it. Set
+  // at the top of each attempt in send()'s retry loop, cleared once that attempt
+  // is done — stop() outside of send() (nothing running) is then just a no-op.
+  let activeController: AbortController | null = null;
 
   // System prompt + tool schemas: paid on every request and not something
   // compaction can touch. It only shrinks by switching capabilities off.
@@ -368,6 +373,7 @@ export function createAgent(opts: {
         // a false match against the PREVIOUS (aborted) attempt's tail can't occur.
         const detector = new LoopDetector();
         const controller = new AbortController();
+        activeController = controller;
         let charLoopHit: LoopHit | null = null;
         try {
           const result = streamText({
@@ -444,6 +450,16 @@ export function createAgent(opts: {
           onEvent({ type: "context", stats: stats() });
           return;
         } catch (e) {
+          // Only stop() ever aborts a controller from outside this loop — the
+          // loop-detector's own abort (above) breaks out of the stream instead
+          // of throwing, so it never reaches here. Keep whatever steps had
+          // already completed rather than discarding a partial answer.
+          if (controller.signal.aborted) {
+            if (pendingTurn.length) history.push(...pendingTurn);
+            onEvent({ type: "error", message: "stopped by user" });
+            onEvent({ type: "context", stats: stats() });
+            return;
+          }
           const wait = rateLimitWait(e);
           // A rate limit hits BETWEEN steps, so pendingTurn holds every completed
           // step — switching models or retrying loses no work and re-runs no tool.
@@ -468,8 +484,13 @@ export function createAgent(opts: {
           onEvent({ type: "error", message: (e as Error).message });
           onEvent({ type: "context", stats: stats() });
           return;
+        } finally {
+          activeController = null;
         }
       }
       }),
+    stop() {
+      activeController?.abort();
+    },
   };
 }
