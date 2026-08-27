@@ -4,12 +4,12 @@ import { existsSync } from "node:fs";
 import { marked } from "marked";
 import { buildAgent } from "./setup.js";
 import { setBashConfirm, setAskUser, orAfter, currentTurnGrants, type ConfirmResolution } from "./tools.js";
-import { setSubagentSink } from "./subagent.js";
+import { setSubagentSink, setRunsSink, activeAgentRuns } from "./subagent.js";
 import { setRenderSink, setTurnKey, carriesAnswer, type Spec } from "./render.js";
 import { sanitize } from "./sanitize.js";
 import { listFailures, clearFailures, removeDomain } from "./failcache.js";
 import { KNOWN_MODELS, KEY_NAMES, keyStatus, writeSecret, loadSecretsIntoEnv, isUnderRoots, allowedRoots, setLocalRoots, allowedCommands, setAllowedCommands, deniedCommands, setDeniedCommands, mcpServers, setMcpServers, setCustomBaseURL, loadConfig, capabilities, setCapabilities, permissionMode, setPermissionMode, disabledTools, setDisabledTools, splitSpec, PROVIDER_KEY, CAPABILITIES, type Capabilities, type KeyName } from "./config.js";
-import { setJobSinks, type FinishedJob } from "./jobs.js";
+import { setJobSinks, runningJobs, type FinishedJob } from "./jobs.js";
 import { loadMemories, saveMemory, deleteMemory } from "./memory.js";
 import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./scheduler.js";
 import { loadFlows, saveFlows, seedExamples, toolArgSpecs, RunControl, type Flow } from "./flows.js";
@@ -204,6 +204,7 @@ setAskUser((question, options) => {
   );
 });
 setSubagentSink((line) => broadcast("sub", { line }));
+setRunsSink(() => broadcastActivity());
 // Text nodes carry markdown (bold, lists, inline code). Render it to safe HTML
 // here — reusing the same marked+sanitize path as assistant prose — so the
 // client can drop it in as innerHTML instead of showing literal ** and #.
@@ -260,11 +261,31 @@ function summarize(args: unknown): string {
 // because a second browser really is blocked while this runs — its composer
 // queues the message rather than pretending it can start.
 let busy = false;
+// What the current `busy` episode actually is, and how it started — "something
+// is running" alone doesn't say whether it's the chat turn someone's watching,
+// a flow, or a scheduled task nobody's looking at right now. Read by the
+// activity indicator (see activitySnapshot below).
+let busyKind: "chat" | "flow" | null = null;
+let scheduledLabel: string | null = null; // the schedule's task id, while it's driving the current busy episode
+function activitySnapshot() {
+  return {
+    busy,
+    kind: busy ? busyKind : null,
+    scheduled: busy ? scheduledLabel : null,
+    jobs: runningJobs(),
+    subagents: activeAgentRuns(),
+  };
+}
+function broadcastActivity() {
+  broadcastAll("activity", activitySnapshot());
+}
 async function runTurn(message: string, s: Session) {
   busy = true;
+  busyKind = "chat";
   active = s; // routes every tool sink at this session for the whole turn
   loadTodos(s.todos); // its checklist, not whoever ran last
   broadcastAll("busy", { busy: true });
+  broadcastActivity();
   let assistant = "";
   rememberTranscript(s, { type: "user", text: message });
   const turn = logUser(s.id, message);
@@ -325,7 +346,10 @@ async function runTurn(message: string, s: Session) {
     s.todos = todoItems(); // hand the checklist back before another session's turn
     active = null;
     busy = false;
+    busyKind = null;
+    scheduledLabel = null;
     broadcastAll("busy", { busy: false });
+    broadcastActivity();
     // A job may have landed while this turn was running — pick it up now that the
     // agent is free. Debounced (not a direct call) so any siblings still landing
     // coalesce into the same next turn, and it runs on a clean stack.
@@ -357,10 +381,13 @@ setJobSinks(
   (j) => {
     finishedJobs.push(j);
     broadcast("info", { message: `[${j.id}] ${j.label} — finished after ${j.seconds}s` }, ownerSession());
+    broadcastActivity();
     scheduleDrain();
   },
-  (id, label) =>
-    broadcast("info", { message: `[${id}] ${label} — still running, continuing in the background` }, ownerSession()),
+  (id, label) => {
+    broadcast("info", { message: `[${id}] ${label} — still running, continuing in the background` }, ownerSession());
+    broadcastActivity();
+  },
 );
 function drainJobs() {
   if (busy || !finishedJobs.length || !built.hasKey()) return;
@@ -390,11 +417,13 @@ async function runFlowById(id: string): Promise<void> {
   const flow = loadFlows().find((f) => f.id === id);
   if (!flow) return;
   busy = true;
+  busyKind = "flow";
   // The Flows page is one shared canvas, so its progress goes to everyone — but
   // a flow still runs tools, and those sinks need a transcript to land in.
   active = ownerSession();
   currentRun = new RunControl();
   broadcastAll("busy", { busy: true });
+  broadcastActivity();
   broadcastAll("flow", { type: "run-start", name: flow.name });
   try {
     await built.runFlow(flow, (e) => broadcastAll("flow", e), currentRun);
@@ -404,7 +433,10 @@ async function runFlowById(id: string): Promise<void> {
     currentRun = null;
     active = null;
     busy = false;
+    busyKind = null;
+    scheduledLabel = null;
     broadcastAll("busy", { busy: false });
+    broadcastActivity();
     scheduleDrain();
   }
 }
@@ -436,6 +468,10 @@ const schedulerTimer = setInterval(() => {
     }
     broadcast("info", { message: `[scheduled] ${t.id}` }, owner);
     broadcast("notify", { title: `Scheduled: ${t.id}`, body: t.prompt }, owner);
+    // Set before the dispatch below: both runTurn and runFlowById set busy/busyKind
+    // synchronously before their first await, so activitySnapshot() sees this
+    // the instant `busy` flips true.
+    scheduledLabel = t.id;
     // A prompt of "flow:<id>" runs a saved flow instead of a chat turn — reuses
     // the existing schedule format, so no migration and no extra UI.
     if (t.prompt.startsWith("flow:")) void runFlowById(t.prompt.slice(5).trim());
@@ -1423,6 +1459,9 @@ server = Bun.serve({
           todos: sessionFor(req).todos,
           transcript: sessionFor(req).transcript,
           maptilerKey: process.env.MAPTILER_KEY ?? "",
+          // Seeds the activity indicator on load/reload — live updates after that
+          // come from the "activity" SSE event, shared across every open tab.
+          activity: activitySnapshot(),
         });
     }
 

@@ -52,6 +52,24 @@
 .connection-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: rgb(var(--c-negative)); box-shadow: 0 0 0 3px rgb(var(--c-negative) / .14); }
 .connection-snackbar.is-ok .connection-dot { background: rgb(var(--c-positive)); box-shadow: 0 0 0 3px rgb(var(--c-positive) / .14); }
 @keyframes snackbar-in { from { opacity: 0; transform: translate(-50%, -8px); } }
+/* Background activity FAB: jobs/subagents/scheduled runs happen off to the side
+   of the visible chat turn with nothing else saying so. Bottom-right, above the
+   composer, out of the way of the fixed sidebar on the opposite edge. */
+.activity { position: fixed; right: 1.15rem; bottom: 1.15rem; z-index: 45; }
+.activity.hidden { display: none; }
+.activity-fab { position: relative; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 999px; background: rgb(var(--c-surface) / .95); border: 1px solid rgb(var(--c-border)); color: rgb(var(--c-accent)); box-shadow: 0 8px 24px rgb(0 0 0 / .18); backdrop-filter: blur(14px); transition: transform .15s, box-shadow .15s; }
+.activity-fab:hover { transform: translateY(-1px); box-shadow: 0 12px 30px rgb(0 0 0 / .24); }
+.activity-fab svg { width: 19px; height: 19px; }
+.activity-badge { position: absolute; top: -3px; right: -3px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: rgb(var(--c-accent)); color: rgb(var(--c-bg)); font: 600 10px/17px var(--font-mono); text-align: center; box-shadow: 0 0 0 2px rgb(var(--c-surface)); }
+.activity-badge:empty { display: none; }
+.activity-panel { position: absolute; right: 0; bottom: calc(100% + .6rem); width: max(240px, min(340px, 84vw)); max-height: min(320px, 60vh); overflow-y: auto; border: 1px solid rgb(var(--c-border)); border-radius: 12px; background: rgb(var(--c-surface) / .97); backdrop-filter: blur(18px); box-shadow: 0 16px 40px rgb(0 0 0 / .24); padding: .4rem; animation: fadein .15s ease-out; }
+.activity-panel.hidden { display: none; }
+.activity-row { display: flex; align-items: flex-start; gap: .55rem; padding: .5rem .55rem; border-radius: 8px; }
+.activity-row + .activity-row { margin-top: 1px; }
+.activity-row svg { width: 14px; height: 14px; flex: 0 0 auto; margin-top: .1rem; color: rgb(var(--c-accent)); }
+.activity-row-text { min-width: 0; }
+.activity-row-kind { font: 600 9px/1.4 var(--font-mono); text-transform: uppercase; letter-spacing: .06em; color: rgb(var(--c-text-dim)); }
+.activity-row-label { font-size: 12px; line-height: 1.4; color: rgb(var(--c-text)); overflow-wrap: anywhere; }
 /* Task list: one row per step, the active one called out. */
 .todo-row { display: flex; align-items: baseline; gap: .5rem; }
 .todo-row[data-s="done"] { color: rgb(var(--c-text-dim)); text-decoration: line-through; }

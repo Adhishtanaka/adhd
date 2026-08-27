@@ -3,7 +3,7 @@ import type { LanguageModel } from "ai";
 import { z } from "zod";
 import { createAgent } from "./agent.js";
 import { confirmAction, cap } from "./tools.js";
-import { reportSubagent, summarize, SUMMARY_DIRECTIVE } from "./subagent.js";
+import { reportSubagent, summarize, SUMMARY_DIRECTIVE, beginRun, endRun } from "./subagent.js";
 import { currentAgentContext, runInAgentContext, logToolCall, logToolResult, type AgentLineage } from "./toollog.js";
 
 const LOOP_CAP = 15; // hard ceiling regardless of what the model asks for
@@ -105,33 +105,38 @@ export function loopTaskTool(opts: {
         : null;
 
       let last = "";
-      for (let i = 1; i <= max; i++) {
-        const prompt =
-          i === 1
-            ? `Task: ${task}\n\nFirst call spec_set to define the checklist (outcomes + how to verify each). Do not start the work yet.`
-            : spec.length === 0
-              ? `You haven't defined the checklist yet — call spec_set now with the outcomes and how to verify each.`
-              : `Continue (pass ${i}/${max}). Do the next unverified item, verify it, and call spec_check. Current checklist:\n${renderSpec(spec)}`;
-        let text = "";
-        await runInAgentContext(lineage, () =>
-          sub.send(prompt, (e) => {
-            if (e.type === "text") text += e.delta;
-            else if (e.type === "tool-call") {
-              reportSubagent(`↳ loop ▸ ⚙ ${e.name} ${summarize(e.args)}`);
-              if (lineage) logToolCall(lineage.session, lineage.turn, e.id, e.name, e.args);
-            } else if (e.type === "tool-result") {
-              if (lineage) logToolResult(e.id, e.result);
-            } else if (e.type === "error") reportSubagent(`↳ loop ▸ error: ${e.message}`);
-          }),
-        );
-        last = cap(text.trim());
-        if (spec.length > 0 && spec.every((s) => s.done)) {
-          reportSubagent(`↳ loop ▸ complete: ${spec.length}/${spec.length} verified`);
-          return `completed in ${i}/${max} passes.\n\nChecklist:\n${renderSpec(spec)}\n\n${last}`;
+      beginRun(agentId, task, "loop");
+      try {
+        for (let i = 1; i <= max; i++) {
+          const prompt =
+            i === 1
+              ? `Task: ${task}\n\nFirst call spec_set to define the checklist (outcomes + how to verify each). Do not start the work yet.`
+              : spec.length === 0
+                ? `You haven't defined the checklist yet — call spec_set now with the outcomes and how to verify each.`
+                : `Continue (pass ${i}/${max}). Do the next unverified item, verify it, and call spec_check. Current checklist:\n${renderSpec(spec)}`;
+          let text = "";
+          await runInAgentContext(lineage, () =>
+            sub.send(prompt, (e) => {
+              if (e.type === "text") text += e.delta;
+              else if (e.type === "tool-call") {
+                reportSubagent(`↳ loop ▸ ⚙ ${e.name} ${summarize(e.args)}`);
+                if (lineage) logToolCall(lineage.session, lineage.turn, e.id, e.name, e.args);
+              } else if (e.type === "tool-result") {
+                if (lineage) logToolResult(e.id, e.result);
+              } else if (e.type === "error") reportSubagent(`↳ loop ▸ error: ${e.message}`);
+            }),
+          );
+          last = cap(text.trim());
+          if (spec.length > 0 && spec.every((s) => s.done)) {
+            reportSubagent(`↳ loop ▸ complete: ${spec.length}/${spec.length} verified`);
+            return `completed in ${i}/${max} passes.\n\nChecklist:\n${renderSpec(spec)}\n\n${last}`;
+          }
         }
+        const done = spec.filter((s) => s.done).length;
+        return `hit the ${max}-pass cap (${done}/${spec.length} verified).\n\nChecklist:\n${renderSpec(spec)}\n\n${last}`;
+      } finally {
+        endRun(agentId);
       }
-      const done = spec.filter((s) => s.done).length;
-      return `hit the ${max}-pass cap (${done}/${spec.length} verified).\n\nChecklist:\n${renderSpec(spec)}\n\n${last}`;
     },
   });
 }

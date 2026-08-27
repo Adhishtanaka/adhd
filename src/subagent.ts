@@ -25,6 +25,29 @@ export function reportSubagent(line: string) {
   sink(line);
 }
 
+// A subagent (or loop_task pass) is invisible in the UI otherwise — it holds
+// the parent turn open (the caller awaits it) but posts no message of its own
+// until it's done, so a person watching just sees the composer say "thinking"
+// with no clue *what*. This is what a status indicator (the activity FAB) reads
+// to say "1 subagent running: <task>" instead of a bare spinner.
+export type AgentRun = { id: string; task: string; kind: "subagent" | "loop" };
+const runs = new Map<string, AgentRun>();
+let onRunsChange: () => void = () => {};
+export function setRunsSink(fn: () => void): void {
+  onRunsChange = fn;
+}
+export function activeAgentRuns(): AgentRun[] {
+  return [...runs.values()];
+}
+export function beginRun(id: string, task: string, kind: AgentRun["kind"]): void {
+  runs.set(id, { id, task, kind });
+  onRunsChange();
+}
+export function endRun(id: string): void {
+  runs.delete(id);
+  onRunsChange();
+}
+
 export function summarize(args: unknown): string {
   if (args && typeof args === "object") {
     const o = args as Record<string, unknown>;
@@ -109,17 +132,22 @@ export function spawnAgentTool(opts: {
       const lineage: AgentLineage | null = parent
         ? { session: parent.session, turn: parent.turn, agentId, parentAgentId: parent.agentId, rootAgentId: parent.rootAgentId ?? parent.agentId ?? agentId }
         : null;
-      await runInAgentContext(lineage, () =>
-        sub.send(prompt, (e) => {
-          if (e.type === "text") text += e.delta;
-          else if (e.type === "tool-call") {
-            sink(`↳ subagent ▸ ⚙ ${e.name} ${summarize(e.args)}`);
-            if (lineage) logToolCall(lineage.session, lineage.turn, e.id, e.name, e.args);
-          } else if (e.type === "tool-result") {
-            if (lineage) logToolResult(e.id, e.result);
-          } else if (e.type === "error") sink(`↳ subagent ▸ error: ${e.message}`);
-        }),
-      );
+      beginRun(agentId, task, "subagent");
+      try {
+        await runInAgentContext(lineage, () =>
+          sub.send(prompt, (e) => {
+            if (e.type === "text") text += e.delta;
+            else if (e.type === "tool-call") {
+              sink(`↳ subagent ▸ ⚙ ${e.name} ${summarize(e.args)}`);
+              if (lineage) logToolCall(lineage.session, lineage.turn, e.id, e.name, e.args);
+            } else if (e.type === "tool-result") {
+              if (lineage) logToolResult(e.id, e.result);
+            } else if (e.type === "error") sink(`↳ subagent ▸ error: ${e.message}`);
+          }),
+        );
+      } finally {
+        endRun(agentId);
+      }
       sink("↳ subagent ▸ done, returning result");
       return cap(text.trim()) || "(subagent produced no output)";
     },

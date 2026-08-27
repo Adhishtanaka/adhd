@@ -960,6 +960,7 @@ function connect() {
   on("compaction", (d) => compactionRow(d));
   on("todos", (d) => renderTodos(d.items));
   on("busy", (d) => setBusy(d.busy));
+  on("activity", (d) => renderActivity(d));
   on("model", (d) => (modelEl.value = d.model));
   on("confirm", (d) => confirmCard(d));
   on("ask", (d) => askCard(d));
@@ -1052,6 +1053,50 @@ function setBusy(v) {
     drainQueue();
   }
 }
+
+// ---- background activity (jobs / subagents / scheduled runs) ----------------
+// The composer's "thinking" status only covers the turn someone's actively
+// watching. A background job, a subagent inside it, or a scheduled run firing
+// unattended all happen with nothing else in the UI saying so — this FAB is
+// that "something's going on off to the side" indicator.
+const activityEl = document.getElementById("activity");
+const activityFab = document.getElementById("activity-fab");
+const activityPanel = document.getElementById("activity-panel");
+const activityCountEl = document.getElementById("activity-count");
+const ACTIVITY_ICON = { job: "terminal", loop: "repeat", subagent: "users", scheduled: "clock" };
+const ACTIVITY_LABEL = { job: "Background job", loop: "Loop task", subagent: "Subagent", scheduled: "Scheduled" };
+function activityRow(kind, label) {
+  const row = el("activity-row");
+  const text = el("activity-row-text");
+  text.append(el("activity-row-kind", ACTIVITY_LABEL[kind] || kind), el("activity-row-label", label));
+  row.append(icon(ACTIVITY_ICON[kind] || "zap"), text);
+  return row;
+}
+function renderActivity(a) {
+  const items = [
+    ...(a?.jobs || []).map((j) => activityRow("job", j.label)),
+    ...(a?.subagents || []).map((s) => activityRow(s.kind, s.task)),
+    ...(a?.scheduled ? [activityRow("scheduled", a.scheduled)] : []),
+  ];
+  activityEl.classList.toggle("hidden", items.length === 0);
+  activityCountEl.textContent = items.length ? String(items.length) : "";
+  activityPanel.replaceChildren(...items);
+  if (!items.length) closeActivityPanel();
+}
+function closeActivityPanel() {
+  activityPanel.classList.add("hidden");
+  activityFab.setAttribute("aria-expanded", "false");
+}
+activityFab.addEventListener("click", () => {
+  const open = activityPanel.classList.toggle("hidden") === false;
+  activityFab.setAttribute("aria-expanded", String(open));
+});
+document.addEventListener("click", (e) => {
+  if (!activityEl.contains(e.target)) closeActivityPanel();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeActivityPanel();
+});
 
 // ---- notifications ----
 function notify(title, body) {
@@ -1519,6 +1564,7 @@ async function refreshState() {
     restoreTranscript(s.transcript);
     renderContext(s.context);
     renderTodos(s.todos);
+    renderActivity(s.activity);
   } catch {}
 }
 modelEl.onchange = () => post("/model", { id: modelEl.value });

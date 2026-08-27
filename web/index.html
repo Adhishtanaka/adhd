@@ -118,6 +118,17 @@
       <span id="connection-message">Connection lost. Messages are paused.</span>
     </div>
 
+    <!-- Background activity: jobs, subagents and scheduled runs happen off to the
+         side of the visible chat turn, with nothing else in the UI saying so.
+         Hidden while nothing's running; app.js fills in #activity-list. -->
+    <div id="activity" class="activity hidden">
+      <div id="activity-panel" class="activity-panel hidden" role="menu" aria-label="Background activity"></div>
+      <button id="activity-fab" type="button" class="activity-fab" title="Background activity" aria-label="Background activity" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        <span id="activity-count" class="activity-badge"></span>
+      </button>
+    </div>
+
     <section id="panel" class="hidden fixed inset-0 bg-base z-30">
       <div class="settings-page-head">
         <button class="settings-back" onclick="closeSettings()" aria-label="Back to chat">←</button>
