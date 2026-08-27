@@ -15,7 +15,7 @@ import { loadSchedule, saveSchedule, isDue, parseAt, type Task } from "./schedul
 import { loadFlows, saveFlows, seedExamples, toolArgSpecs, RunControl, type Flow } from "./flows.js";
 import { migrateMcpDefaults, mcpCatalog, closeMcpClients } from "./mcp.js";
 import { todoItems, setTodoSink, resetTodos, loadTodos, type TodoItem } from "./todo.js";
-import { logUser, logAssistant, logToolCall, logToolResult, logUsage, logInfo, logError, recentLogs, toolTotals, clearLogs, type LogRow } from "./toollog.js";
+import { logUser, logAssistant, logToolCall, logToolResult, logUsage, logInfo, logError, recentLogs, toolTotals, clearLogs, runInAgentContext, type LogRow } from "./toollog.js";
 import { runReflection, approveProposal, rejectProposal, loadProposals, seedReflectTask } from "./reflect.js";
 import type { Agent } from "./agent.js";
 
@@ -270,7 +270,11 @@ async function runTurn(message: string, s: Session) {
   const turn = logUser(s.id, message);
   setTurnKey(`${s.id}:${turn}`);
   try {
-    await s.agent.send(message, (e) => {
+    // Root of this turn's lineage — spawn_agent/loop_task read it (via
+    // toollog's currentAgentContext) to stamp their own subagent's tool calls
+    // with agentId/parentAgentId/rootAgentId back to this turn.
+    await runInAgentContext({ session: s.id, turn, agentId: null, parentAgentId: null, rootAgentId: null }, () =>
+      s.agent.send(message, (e) => {
       switch (e.type) {
         case "text":
           assistant += e.delta;
@@ -306,7 +310,8 @@ async function runTurn(message: string, s: Session) {
           logError(s.id, turn, e.message);
           break;
       }
-    });
+      }),
+    );
     const html = sanitize(await marked.parse(assistant));
     if (html.trim()) rememberTranscript(s, { type: "assistant", html });
     logAssistant(s.id, turn, assistant);
@@ -567,6 +572,8 @@ function settingsFragment(error?: string): string {
       <div class="settings-section"><div id="roots">${rootsFragment()}</div></div>
       <h2>Always-allowed commands <span class="muted">(${n(allowedCommands().length, "command")})</span></h2>
       <div class="settings-section"><div id="allowed">${allowedFragment()}</div></div>
+      <h2>Never-allowed commands <span class="muted">(${n(deniedCommands().length, "command")})</span></h2>
+      <div class="settings-section"><div id="denied">${deniedFragment()}</div></div>
       <h2>MCP servers <span class="muted">(${n(Object.keys(mcpServers()).length, "server")})</span></h2>
       <div class="settings-section"><div id="mcp">${mcpFragment()}</div></div>`,
     ) +
@@ -617,6 +624,19 @@ function allowedFragment(): string {
     })
     .join("");
   return rows || '<p class="muted">None. Approving a command with “Always allow” adds it here.</p>';
+}
+
+function deniedFragment(): string {
+  const rows = deniedCommands()
+    .map((k) => {
+      const [runner, prog] = k.split(":");
+      return `<div class="row">
+        <span class="mono">${esc(prog ?? k)} <span class="muted">(${esc(runner ?? "")})</span></span>
+        <button class="btn ghost" hx-post="/denied/delete" hx-vals='${hxVals({ key: k })}' hx-target="#denied" hx-swap="innerHTML">Revoke</button>
+      </div>`;
+    })
+    .join("");
+  return rows || '<p class="muted">None. Declining a command with “Never” adds it here.</p>';
 }
 
 // MCP servers are launched once at startup (see mcp.ts), so edits here land on
@@ -745,7 +765,7 @@ function failuresFragment(): string {
     ${listFailures().length ? `<button class="btn ghost" hx-post="/failures/clear" hx-target="#fails" hx-swap="innerHTML">Clear all</button>` : ""}`;
 }
 
-function memoryFragment(): string {
+function memoryFragment(notice?: string): string {
   const rows = loadMemories()
     .map(
       (m) => `<div class="row">
@@ -754,11 +774,12 @@ function memoryFragment(): string {
       </div>`,
     )
     .join("");
-  return `${rows || '<p class="muted">No memories.</p>'}
+  return `${notice ? `<p class="muted">${esc(notice)}</p>` : ""}${rows || '<p class="muted">No memories.</p>'}
     <form hx-post="/memory" hx-target="#mem" hx-swap="innerHTML" class="stack">
       <input name="id" placeholder="id, e.g. preferences/style" required />
       <input name="description" placeholder="one-line summary" required />
       <textarea name="body" placeholder="the fact / detail" required></textarea>
+      <label class="muted"><input type="checkbox" name="overrideTombstone" value="true" /> Save anyway if this matches a deleted memory</label>
       <button class="btn">Add memory</button>
     </form>`;
 }
@@ -818,8 +839,14 @@ function logPage(): string {
     if (r.kind === "usage") return `<div class="ev ev-usage">${head("◫", "Step usage", `<span class="token-badge">${(r.tokens ?? 0).toLocaleString()} tokens</span>`)}</div>`;
     if (r.kind === "error") return `<div class="ev ev-error">${head("!", "Error")}<p>${esc(r.content ?? "")}</p></div>`;
     if (r.kind === "info") return `<div class="ev ev-info">${head("i", "Info")}<p>${esc(r.content ?? "")}</p></div>`;
-    return `<div class="ev ev-tool">
-      ${head("⌘", "Tool call", `<span class="name-badge">${esc(r.name ?? "")}</span>${r.tokens != null ? `<span class="token-badge">${r.tokens.toLocaleString()} tokens</span>` : ""}`)}
+    // agent_id is only set on a row logged from inside spawn_agent/loop_task —
+    // the main turn's own tool calls have it null — so its presence alone is
+    // "this ran inside a subagent", worth a visual break from the main thread.
+    const lineageBadge = r.agent_id
+      ? `<span class="name-badge" title="parent: ${esc(r.parent_agent_id ?? "main turn")}">↳ subagent ${esc(r.agent_id)}</span>`
+      : "";
+    return `<div class="ev ev-tool${r.agent_id ? " ev-sub" : ""}">
+      ${head("⌘", "Tool call", `<span class="name-badge">${esc(r.name ?? "")}</span>${lineageBadge}${r.tokens != null ? `<span class="token-badge">${r.tokens.toLocaleString()} tokens</span>` : ""}`)}
       <div class="payloads">
         <details><summary><span>Arguments</span><span class="chevron">⌄</span></summary><pre>${esc(r.content ?? "")}</pre></details>
         <details><summary><span>Result</span><span class="chevron">⌄</span></summary><pre>${esc(r.result ?? "(pending)")}</pre></details>
@@ -846,11 +873,17 @@ function logPage(): string {
       const prompt = ordered.find((r) => r.kind === "user")?.content ?? "Agent activity";
       const tools = ordered.filter((r) => r.kind === "tool").length;
       const tokens = ordered.filter((r) => r.kind === "usage").reduce((sum, r) => sum + (r.tokens ?? 0), 0);
-      return `<section class="turn" data-kinds="${ordered.map((r) => r.kind).join(" ")}">
+      const subCount = new Set(ordered.filter((r) => r.agent_id).map((r) => r.agent_id)).size;
+      // "sub" is a synthetic kind, not one toollog actually writes — it makes a
+      // turn that delegated to spawn_agent/loop_task show up under the
+      // Subagents filter alongside its real kinds (still shows under "All").
+      const kinds: string[] = ordered.map((r) => r.kind);
+      if (subCount) kinds.push("sub");
+      return `<section class="turn" data-kinds="${kinds.join(" ")}">
         <header class="turn-head">
           <div class="turn-index">${String(ordered[0].turn).padStart(2, "0")}</div>
           <div class="turn-title"><h2>${esc(prompt)}</h2><p><time>${when}</time><span>${session.slice(0, 12)}</span></p></div>
-          <div class="turn-meta">${tools ? `<span>${tools} tool${tools === 1 ? "" : "s"}</span>` : ""}${tokens ? `<span>${tokens.toLocaleString()} tok</span>` : ""}</div>
+          <div class="turn-meta">${tools ? `<span>${tools} tool${tools === 1 ? "" : "s"}</span>` : ""}${subCount ? `<span>${subCount} subagent${subCount === 1 ? "" : "s"}</span>` : ""}${tokens ? `<span>${tokens.toLocaleString()} tok</span>` : ""}</div>
         </header>
         <div class="timeline">${ordered.map(rowHtml).join("")}</div>
       </section>`;
@@ -918,6 +951,9 @@ function logPage(): string {
   .ev { position: relative; padding: .8rem 0; font-size: .84rem; }
   .ev-icon { position: absolute; left: -2.48rem; top: .66rem; display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--muted); font: 500 11px/1 "DM Mono", monospace; }
   .ev-user .ev-icon { color: var(--blue); } .ev-assistant .ev-icon { color: var(--green); } .ev-error .ev-icon { border-color: color-mix(in srgb, var(--red) 45%, var(--line)); color: var(--red); } .ev-info .ev-icon { color: var(--amber); }
+  /* A subagent's own tool calls (agent_id set) are a step removed from the main
+     turn's thread — a left border + slight indent reads as "nested" at a glance. */
+  .ev-sub { padding-left: .65rem; border-left: 2px solid var(--line); }
   .ev-head { display: flex; align-items: center; gap: .45rem; min-height: 22px; }
   .ev-head b { font-size: .74rem; font-weight: 600; }
   .ev-head time { margin-left: auto; color: var(--muted); font: 400 9px/1 "DM Mono", monospace; }
@@ -954,7 +990,7 @@ function logPage(): string {
       <div class="metric"><span>Sessions / errors</span><strong>${sessionCount}<small> / ${errorCount}</small></strong></div>
     </section>
     <div class="tools"><span class="tools-label">Tool footprint</span>${totals || '<span class="tool-pill">No calls yet</span>'}</div>
-    ${turns ? `<nav class="controls" aria-label="Filter activity"><button class="filter active" data-filter="all">All</button><button class="filter" data-filter="tool">Tools</button><button class="filter" data-filter="error">Errors</button></nav>` : ""}
+    ${turns ? `<nav class="controls" aria-label="Filter activity"><button class="filter active" data-filter="all">All</button><button class="filter" data-filter="tool">Tools</button><button class="filter" data-filter="sub">Subagents</button><button class="filter" data-filter="error">Errors</button></nav>` : ""}
     <div class="turns">${turns || '<div class="empty"><strong>The journal is quiet.</strong>Send a message in chat and activity will appear here.</div>'}</div>
   </main>
   <script>
@@ -1247,9 +1283,22 @@ const server = Bun.serve({
             }
           }
           return html(settingsFragment());
-        case "/memory":
-          saveMemory({ id: b.id, type: b.type || "note", description: b.description, body: b.body });
-          return html(memoryFragment());
+        case "/memory": {
+          // A human editing memory through the web UI is the strongest
+          // "explicit" signal there is. overrideTombstone is deliberately only
+          // reachable here — never from the model-facing remember tool — so a
+          // deleted fact can only be un-deleted by a person, not by output the
+          // model produced (including output an injected instruction produced).
+          const r = saveMemory({
+            id: b.id,
+            type: b.type || "note",
+            description: b.description,
+            body: b.body,
+            origin: "explicit",
+            overrideTombstone: b.overrideTombstone === true || b.overrideTombstone === "true",
+          });
+          return html(memoryFragment(r.ok ? undefined : r.message));
+        }
         case "/memory/delete":
           deleteMemory(b.id);
           return html(memoryFragment());
@@ -1290,6 +1339,9 @@ const server = Bun.serve({
         case "/allowed/delete":
           setAllowedCommands(allowedCommands().filter((k) => k !== b.key));
           return html(allowedFragment());
+        case "/denied/delete":
+          setDeniedCommands(deniedCommands().filter((k) => k !== b.key));
+          return html(deniedFragment());
         case "/mcp": {
           // Name goes into a tool name, so keep it to what a tool name allows.
           const name = String(b.name || "").trim().replace(/[^A-Za-z0-9_-]/g, "_");

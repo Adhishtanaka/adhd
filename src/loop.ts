@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createAgent } from "./agent.js";
 import { confirmAction, cap } from "./tools.js";
 import { reportSubagent, summarize, SUMMARY_DIRECTIVE } from "./subagent.js";
+import { currentAgentContext, runInAgentContext, logToolCall, logToolResult, type AgentLineage } from "./toollog.js";
 
 const LOOP_CAP = 15; // hard ceiling regardless of what the model asks for
 
@@ -95,6 +96,14 @@ export function loopTaskTool(opts: {
         historyBudget: opts.historyBudget,
       });
 
+      // One agentId for the whole run — a pass continues the same subagent, it
+      // isn't a new one each time, so lineage stays flat across all `max` passes.
+      const parent = currentAgentContext();
+      const agentId = crypto.randomUUID().slice(0, 8);
+      const lineage: AgentLineage | null = parent
+        ? { session: parent.session, turn: parent.turn, agentId, parentAgentId: parent.agentId, rootAgentId: parent.rootAgentId ?? parent.agentId ?? agentId }
+        : null;
+
       let last = "";
       for (let i = 1; i <= max; i++) {
         const prompt =
@@ -104,11 +113,17 @@ export function loopTaskTool(opts: {
               ? `You haven't defined the checklist yet — call spec_set now with the outcomes and how to verify each.`
               : `Continue (pass ${i}/${max}). Do the next unverified item, verify it, and call spec_check. Current checklist:\n${renderSpec(spec)}`;
         let text = "";
-        await sub.send(prompt, (e) => {
-          if (e.type === "text") text += e.delta;
-          else if (e.type === "tool-call") reportSubagent(`↳ loop ▸ ⚙ ${e.name} ${summarize(e.args)}`);
-          else if (e.type === "error") reportSubagent(`↳ loop ▸ error: ${e.message}`);
-        });
+        await runInAgentContext(lineage, () =>
+          sub.send(prompt, (e) => {
+            if (e.type === "text") text += e.delta;
+            else if (e.type === "tool-call") {
+              reportSubagent(`↳ loop ▸ ⚙ ${e.name} ${summarize(e.args)}`);
+              if (lineage) logToolCall(lineage.session, lineage.turn, e.id, e.name, e.args);
+            } else if (e.type === "tool-result") {
+              if (lineage) logToolResult(e.id, e.result);
+            } else if (e.type === "error") reportSubagent(`↳ loop ▸ error: ${e.message}`);
+          }),
+        );
         last = cap(text.trim());
         if (spec.length > 0 && spec.every((s) => s.done)) {
           reportSubagent(`↳ loop ▸ complete: ${spec.length}/${spec.length} verified`);

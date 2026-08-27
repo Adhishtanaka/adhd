@@ -86,8 +86,10 @@ export type Action = (typeof ACTIONS)[number];
 
 // Actions that change the page rather than just look at it. They go through the
 // same approval gate the Chrome MCP server had (trust:"read" — silent on
-// permission mode "normal", a card on "ask").
-const MUTATING = new Set<Action>(["fill", "click", "type", "press", "eval"]);
+// permission mode "normal", a card on "ask"). Exported so a readonly subagent
+// (subagent.ts) can block these actions specifically while still allowing
+// read/snapshot/screenshot.
+export const MUTATING = new Set<Action>(["fill", "click", "type", "press", "eval"]);
 
 export type Args = {
   action: Action;

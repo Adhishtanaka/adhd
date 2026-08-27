@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { HOME_ROOT } from "./config.js";
 
 // A full activity log, not just tool calls: every user prompt, every tool the
@@ -22,9 +23,48 @@ db.exec(`CREATE TABLE IF NOT EXISTS event_log (
   tokens INTEGER
 )`);
 
-const insertRow = db.query(
-  `INSERT INTO event_log (ts, session, turn, kind, name, content) VALUES (?, ?, ?, ?, ?, ?)`,
+// Nullable lineage columns, added after the table already existed for current
+// installs — CREATE TABLE IF NOT EXISTS above never reaches them, so this is
+// the migration. SQLite errors on a duplicate column; swallow it.
+for (const col of ["agent_id TEXT", "parent_agent_id TEXT"]) {
+  try {
+    db.exec(`ALTER TABLE event_log ADD COLUMN ${col}`);
+  } catch {
+    /* column already there */
+  }
+}
+
+// Which (sub)agent is currently running, so a tool call it makes can be traced
+// back to its parent turn/agent in the log. Same ALS pattern as tools.ts's
+// autoApprove: per-call-stack, not a module flag, since a subagent's send()
+// can run while other activity is in flight. `null` (no context) means "not
+// inside a lineage-tracked call" — logging just no-ops on the two new columns,
+// same as headless/test invocations of logToolCall today.
+export type AgentLineage = {
+  session: string;
+  turn: number;
+  agentId: string | null;
+  parentAgentId: string | null;
+  rootAgentId: string | null;
+};
+const agentCtx = new AsyncLocalStorage<AgentLineage>();
+export function runInAgentContext<T>(lineage: AgentLineage | null, fn: () => Promise<T>): Promise<T> {
+  return lineage ? agentCtx.run(lineage, fn) : fn();
+}
+export function currentAgentContext(): AgentLineage | null {
+  return agentCtx.getStore() ?? null;
+}
+
+const insertRowStmt = db.query(
+  `INSERT INTO event_log (ts, session, turn, kind, name, content, agent_id, parent_agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 );
+// One place that fills the two lineage columns from whatever agent context is
+// ambient right now — every row (not just tool calls) picks up lineage this
+// way, so a subagent's own text/errors are traceable too, not only its tools.
+function insertRow(ts: number, session: string, turn: number, kind: string, name: string | null, content: string | null) {
+  const ctx = agentCtx.getStore();
+  return insertRowStmt.run(ts, session, turn, kind, name, content, ctx?.agentId ?? null, ctx?.parentAgentId ?? null);
+}
 const setResult = db.query(`UPDATE event_log SET result = ? WHERE id = ?`);
 const setTokens = db.query(`UPDATE event_log SET tokens = ? WHERE id IN (SELECT value FROM json_each(?))`);
 const recent = db.query(`SELECT * FROM event_log ORDER BY id DESC LIMIT ?`);
@@ -51,21 +91,21 @@ let turnSeq = lastTurn.turn;
 
 export function logUser(session: string, text: string): number {
   const turn = ++turnSeq;
-  insertRow.run(Date.now(), session, turn, "user", null, clip(text));
+  insertRow(Date.now(), session, turn, "user", null, clip(text));
   return turn;
 }
 
 export function logAssistant(session: string, turn: number, text: string): void {
   if (!text.trim()) return;
-  insertRow.run(Date.now(), session, turn, "assistant", null, clip(text));
+  insertRow(Date.now(), session, turn, "assistant", null, clip(text));
 }
 
 export function logInfo(session: string, turn: number, message: string): void {
-  insertRow.run(Date.now(), session, turn, "info", null, clip(message));
+  insertRow(Date.now(), session, turn, "info", null, clip(message));
 }
 
 export function logError(session: string, turn: number, message: string): void {
-  insertRow.run(Date.now(), session, turn, "error", null, clip(message));
+  insertRow(Date.now(), session, turn, "error", null, clip(message));
 }
 
 // tool-call id -> row id, live only until that call's result/usage lands.
@@ -74,7 +114,7 @@ const openCalls = new Map<string, number>();
 let pendingRowIds: number[] = []; // tool rows waiting on the next usage total
 
 export function logToolCall(session: string, turn: number, callId: string, tool: string, args: unknown): void {
-  const { lastInsertRowid } = insertRow.run(Date.now(), session, turn, "tool", tool, clip(args));
+  const { lastInsertRowid } = insertRow(Date.now(), session, turn, "tool", tool, clip(args));
   const rowId = Number(lastInsertRowid);
   openCalls.set(callId, rowId);
   pendingRowIds.push(rowId);
@@ -105,7 +145,7 @@ export function logUsage(session: string, turn: number, total: number): void {
     setTokens.run(delta, JSON.stringify(pendingRowIds));
     pendingRowIds = [];
   }
-  const { lastInsertRowid } = insertRow.run(Date.now(), session, turn, "usage", null, null);
+  const { lastInsertRowid } = insertRow(Date.now(), session, turn, "usage", null, null);
   setTokens.run(total, JSON.stringify([Number(lastInsertRowid)]));
 }
 
@@ -119,6 +159,8 @@ export type LogRow = {
   content: string | null;
   result: string | null;
   tokens: number | null;
+  agent_id: string | null;
+  parent_agent_id: string | null;
 };
 export const recentLogs = (limit = 500): LogRow[] => recent.all(limit) as LogRow[];
 // Rows added since a watermark id — what reflect.ts scans on each pass, so it

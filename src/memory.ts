@@ -2,9 +2,12 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSy
 import { join, dirname, relative, resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createHash } from "node:crypto";
 import { tool, type Tool } from "ai";
 import { z } from "zod";
 import { HOME_ROOT } from "./config.js";
+import { confirmAction } from "./tools.js";
+import { looksInjected } from "./security.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +24,13 @@ export function memoryPath(id: string): string | null {
   return file.startsWith(resolve(MEMORY_DIR) + sep) ? file : null;
 }
 
+// "explicit" = a direct remember call or a human editing memory through the
+// web UI; "synthesized" = an approved reflect proposal. The distinction exists
+// so a future automated pass can be built to never silently touch an explicit
+// entry — nothing today auto-EDITS existing memories, but this establishes the
+// invariant up front rather than bolting it on after something needs it.
+export type MemoryOrigin = "explicit" | "synthesized";
+
 export type Memory = {
   id: string;
   type: string;
@@ -29,6 +39,7 @@ export type Memory = {
   tags: string[];
   timestamp: string;
   body: string;
+  origin: MemoryOrigin;
 };
 
 // Minimal frontmatter parse — no YAML dep, same spirit as parseSkill.
@@ -58,6 +69,11 @@ export function parse(md: string, id: string): Memory {
     tags,
     timestamp: meta.timestamp || "",
     body,
+    // Missing on disk (every memory written before this field existed) defaults
+    // to "explicit" — the safe default, since it either came from an unconfirmed
+    // remember call or a human-approved reflect proposal, never from an
+    // automated pass that could need this invariant.
+    origin: meta.origin === "synthesized" ? "synthesized" : "explicit",
   };
 }
 
@@ -68,6 +84,7 @@ export function serialize(m: Omit<Memory, "id">): string {
     `description: ${m.description}`,
     `tags: [${m.tags.join(", ")}]`,
     `timestamp: ${m.timestamp}`,
+    `origin: ${m.origin}`,
   ].join("\n");
   return `---\n${fm}\n---\n\n${m.body.trim()}\n`;
 }
@@ -147,8 +164,48 @@ function appendLog(action: "Create" | "Update", id: string, description: string)
   writeFileSync(path, text);
 }
 
+// Content-based identity, independent of whatever id the caller chose — a
+// remember-happy model re-saving the same fact under a slightly different slug
+// still fingerprints the same, so it's caught as a duplicate instead of piling
+// up near-identical concepts.
+export function memoryFingerprint(body: string): string {
+  const normalized = body.trim().toLowerCase().replace(/\s+/g, " ");
+  return createHash("sha1").update(normalized).digest("hex");
+}
+
+// --- tombstones ---------------------------------------------------------
+// One JSON file per deleted memory's content fingerprint, so a later save (the
+// model's own remember call, or a reflect proposal re-deriving the same fact
+// from the same recurring conversation) can't silently bring back something a
+// human deliberately removed. Lives alongside the git-backed memory repo, so
+// deletions AND their tombstones ride the same commit history.
+const TOMBSTONE_DIR = join(MEMORY_DIR, ".tombstones");
+type Tombstone = { id: string; fingerprint: string; deletedAt: string; description: string };
+
+function tombstonePath(fingerprint: string): string {
+  return join(TOMBSTONE_DIR, `${fingerprint}.json`);
+}
+
+function recordTombstone(t: Tombstone): void {
+  mkdirSync(TOMBSTONE_DIR, { recursive: true });
+  writeFileSync(tombstonePath(t.fingerprint), JSON.stringify(t, null, 2));
+}
+
+function findTombstone(fingerprint: string): Tombstone | null {
+  const file = tombstonePath(fingerprint);
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 // Write (create or update) a memory concept. Shared by the remember tool and the
 // web memory editor. `id` is path-safe-checked so a crafted id can't escape the bundle.
+// `overrideTombstone` is a human-only escape hatch (web.ts's /memory route) —
+// never exposed on the model-facing remember tool, since the whole point of a
+// tombstone is that model output can't be the thing that clears it.
 export function saveMemory(m: {
   id: string;
   type: string;
@@ -156,9 +213,31 @@ export function saveMemory(m: {
   description: string;
   tags?: string[];
   body: string;
-}): { ok: boolean; existed: boolean; message: string } {
+  origin: MemoryOrigin;
+  overrideTombstone?: boolean;
+}): { ok: boolean; existed: boolean; duplicateOf?: string; tombstoned?: boolean; message: string } {
   const file = memoryPath(m.id);
   if (!file) return { ok: false, existed: false, message: `invalid memory id "${m.id}"` };
+
+  const fp = memoryFingerprint(m.body);
+  const tomb = findTombstone(fp);
+  if (tomb && !m.overrideTombstone)
+    return {
+      ok: false,
+      existed: false,
+      tombstoned: true,
+      message: `a memory with this exact content was deleted (${tomb.deletedAt}) — not re-saving`,
+    };
+
+  const duplicate = loadMemories().find((mm) => mm.id !== m.id && memoryFingerprint(mm.body) === fp);
+  if (duplicate)
+    return {
+      ok: false,
+      existed: false,
+      duplicateOf: duplicate.id,
+      message: `already saved as memory "${duplicate.id}" — not duplicating`,
+    };
+
   const existed = existsSync(file);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(
@@ -170,6 +249,7 @@ export function saveMemory(m: {
       tags: m.tags ?? [],
       timestamp: new Date().toISOString(),
       body: m.body,
+      origin: m.origin,
     }),
   );
   appendLog(existed ? "Update" : "Create", m.id, m.description);
@@ -181,6 +261,8 @@ export function deleteMemory(id: string): { ok: boolean; message: string } {
   const file = memoryPath(id);
   if (!file) return { ok: false, message: `invalid memory id "${id}"` };
   if (!existsSync(file) || !statSync(file).isFile()) return { ok: false, message: `no memory "${id}"` };
+  const { body, description } = parse(readFileSync(file, "utf8"), id);
+  recordTombstone({ id, fingerprint: memoryFingerprint(body), deletedAt: new Date().toISOString(), description });
   unlinkSync(file);
   void commitMemory(`Delete ${id}`);
   return { ok: true, message: `deleted memory ${id}` };
@@ -199,8 +281,19 @@ export function memoryTools(): Record<string, Tool> {
         tags: z.array(z.string()).optional(),
         body: z.string().describe("the knowledge, as markdown"),
       }),
-      execute: async ({ id, type, title, description, tags, body }) =>
-        saveMemory({ id, type, title, description, tags, body }).message,
+      execute: async ({ id, type, title, description, tags, body }) => {
+        // remember used to write instantly and unconfirmed — reachable purely
+        // from model output, including output derived from an injected tool
+        // result. permissionMode "auto" keeps the old instant-write behavior;
+        // "ask"/"normal" now require a nod, same gate bash/pip_install use.
+        const suspicious = looksInjected(`${description}\n${body}`);
+        const prompt =
+          `remember "${id}": ${description}` +
+          (suspicious ? "\n\n⚠ this content looks like it may contain embedded instructions — review before saving." : "");
+        if (!(await confirmAction(prompt))) return "user declined to save this memory";
+        const r = saveMemory({ id, type, title, description, tags, body, origin: "explicit" });
+        return r.message;
+      },
     }),
     recall: tool({
       description: "Load a memory's full content by id. Prefer this over guessing when memory lists a relevant concept.",

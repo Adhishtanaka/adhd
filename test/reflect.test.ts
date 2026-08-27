@@ -62,7 +62,10 @@ test("a request keyword repeated 4x proposes a memory, not before", () => {
 
 test("an existing memory covering the keyword suppresses a duplicate proposal", () => {
   const kw = `zzzcovered${rid}`;
-  saveMemory({ id: `reflect-test/${rid}`, type: "note", description: `already about ${kw}`, body: "x" });
+  // body must be unique per run, same as every other value in this file — memory.ts
+  // now refuses to save a body whose content fingerprint already exists on disk
+  // (or was recently deleted), and a literal "x" would collide across runs.
+  saveMemory({ id: `reflect-test/${rid}`, type: "note", description: `already about ${kw}`, body: `covering note ${rid}`, origin: "explicit" });
   for (let i = 0; i < 4; i++) logTurn(`${noise("covmem", i)} ${kw} ${noise("covmem", i)}z`, []);
   expect(runReflection(4).some((x) => x.id === `memory:${kw}`)).toBe(false);
   deleteMemory(`reflect-test/${rid}`);

@@ -52,7 +52,10 @@ bun start          # builds the frontend, then opens http://127.0.0.1:8787
 - **Builds visual Flows** — reusable workflows you wire up once, then run from chat, on a schedule, or with a button.
 - **Tracks its own progress** on multi-step tasks with a visible, ticking checklist.
 - **Loads skills** — extra instructions the model pulls in only when a task needs them.
-- **Delegates** large subtasks to subagents, or grinds through a hard task across several passes.
+- **Delegates** large subtasks to subagents (optionally **read-only**, for research that must not touch anything), or grinds through a hard task across several passes.
+- **Catches itself looping** — repeated text or the same tool call fired over and over gets a self-correcting nudge mid-turn, then a hard stop if it keeps happening, instead of burning the whole turn on garbage.
+- **Treats file reads as untrusted data** too, not just web pages and tool results — a document, a cloned repo's README, or a fetched page can't quietly slip instructions past the model.
+- **Traces subagent activity** back to the turn that spawned it in the activity log (`/log`), so a delegated task's tool calls aren't a black box.
 - Shows a live meter of what's filling the model's context window, and a **Compact now** button to shrink it.
 - Light, dark, and system themes.
 
@@ -69,15 +72,17 @@ bun start          # builds the frontend, then opens http://127.0.0.1:8787
 | `web_search` | Search the web — pages, images, videos, places, shopping, news | — |
 | `browser` | Drive headless Chrome: read a page as clean markdown, snapshot its elements, screenshot, fill/click/type/press, eval JS | on changes |
 | `search_files` | Find your own local images/videos/docs to show | — |
-| `remember` / `recall` | Save or load a durable memory | — |
+| `remember` / `recall` | Save or load a durable memory | yes* |
 | `todo_write` | Show and update a live task checklist | — |
 | `schedule` | Add, list, or remove scheduled tasks | — |
 | `use_skill` | Load a skill's full instructions | — |
-| `spawn_agent` | Delegate a self-contained subtask to a subagent (subagents can't spawn further) | — |
+| `spawn_agent` | Delegate a self-contained subtask to a subagent, optionally `readonly` (subagents can't spawn further) | — |
 | `loop_task` | Iterate a hard task across multiple passes | yes |
 | `run_flow` | Run a saved Flow by name | — |
 | `render_ui` | Draw a rich block — image, gallery, table, chart, map, sources | — |
 | `ask_user` | Ask a multiple-choice question | interactive |
+
+\* `remember` skips the prompt in **Approve everything** mode (same as everything else) — otherwise every save gets a quick confirmation, flagged if the content looks like it might contain embedded instructions rather than a fact.
 
 `pip_install`/`run_python` and `npm_install`/`run_node` never touch your system Python or a real project's `node_modules` — packages and scripts land in `~/.adhd/sandbox/python` (its own venv) and `~/.adhd/sandbox/node` (its own npm project), created on first use. A package installed there stays there.
 
@@ -108,6 +113,11 @@ Memory is a folder of plain markdown files at `~/.adhd/memory/` — one file per
 
 Every `remember`/`recall` write is also a git commit — `~/.adhd/memory/` is its own local git repo, created on first save, scoped to that folder only. A memory overwriting an old fact doesn't lose it: run `git log` / `git show` inside that folder whenever you actually need to see how something changed. Nothing diffs or surfaces automatically — the history is just there when you go looking for it.
 
+A `remember` call isn't an instant, silent write: outside **Approve everything** mode it asks first, same as a shell command — the model calling it purely because a tool result or a web page told it to isn't enough on its own. Each memory also carries an `origin` (`explicit` for a direct `remember`/Settings edit, `synthesized` for an approved Reflect proposal) and is content-fingerprinted, so:
+
+- saving something whose exact content already exists under a different id is refused, pointing you at the existing one instead of piling up near-duplicates;
+- deleting a memory leaves a small marker behind so the same fact can't quietly reappear later from a `remember` call or a Reflect proposal re-deriving it — only **Settings → Memory**'s "save anyway" checkbox can bring it back, since the point is that model output alone shouldn't be able to.
+
 ### Reflect
 
 Once a day (or on demand, from **Settings → Reflect**), adhd scans its own activity log for things that keep repeating — the same few tool calls in a row, or the same topic coming up across your prompts — and drafts either a memory or a reusable Flow for it. Pure frequency counting; no model call in the scan itself. Every draft sits in **Settings → Reflect** until you approve or reject it — reject one and it's never proposed again.
@@ -119,6 +129,15 @@ Once a day (or on demand, from **Settings → Reflect**), adhd scans its own act
 - **Ask every time** — every side effect gets a confirmation card, no exceptions.
 - **Normal** (default) — asks before anything that changes your machine, minus what you've already approved.
 - **Approve everything** — never asks. For a sandbox you don't mind losing.
+
+A confirmation card for a plain command (not a script, and not flagged dangerous) offers four answers, not just yes/no:
+
+| Answer | What it does |
+|---|---|
+| **Allow once** | Runs this one call, nothing remembered. |
+| **Allow for this task** | Runs this and every matching call for the rest of the current message — gone the moment you send a new one, so it can't quietly outlive the task you actually approved it for. |
+| **Always allow** | Blanket-approves the program from now on, same as today — saved to `config.json`'s `allowedCommands`. |
+| **Never** | Refuses the program from now on, without even asking again — saved to `deniedCommands`, the mirror image of `allowedCommands`. Clear it the same way, from the same list. |
 
 Flow tool nodes are the one exception: you built the graph and pressed Run, so they execute without asking. A confirmation nobody answers within 5 minutes is declined automatically, so a scheduled run doesn't hang waiting for a click that will never come.
 
@@ -148,6 +167,7 @@ Merged from `~/.adhd/config.json`, then `./.adhd/config.json` (project wins). Ev
   "systemPrompt": "...",               // replaces the default system prompt
   "localRoots": ["/path/..."],         // folders the file tools may touch (default: home)
   "allowedCommands": ["bash:git"],     // "always allow" list, built from the approval prompt
+  "deniedCommands": [],                 // "never" list, mirror of allowedCommands
   "permissionMode": "normal",          // "ask" | "normal" | "auto"
   "capabilities": { "shell": false },  // switch a whole feature group off
   "disabledTools": ["run_script"],     // turn off individual tools
@@ -183,13 +203,15 @@ One Bun process serves the UI over SSE and runs the agent in-process — no sepa
 - **`web/`** — the frontend (chat UI + the Flows canvas), bundled by Vite into `public/`.
 - **`src/web.ts`** — the HTTP/SSE server: chat, settings, and flow routes.
 - **`src/setup.ts`** — assembles config, models, tools, and the system prompt into one agent.
-- **`src/agent.ts`** — the turn loop: streams text and tool calls, retries, falls back between models.
+- **`src/agent.ts`** — the turn loop: streams text and tool calls, retries, falls back between models, and runs every `LoopDetector` check.
+- **`src/loopdetect.ts`** — the mid-turn repetition detector `agent.ts` calls on every text chunk and tool call.
 - **`src/tools.ts`**, **`src/browser.ts`** — the built-in file/shell/web tools and the headless-Chrome browser tool.
 - **`src/flows.ts`** — the Flow graph runner.
 - **`src/mcp.ts`** — connects to MCP servers and exposes their tools, approval-gated.
-- **`src/memory.ts`**, **`src/skills.ts`**, **`src/scheduler.ts`**, **`src/subagent.ts`**, **`src/loop.ts`** — memory, skills, scheduling, subagents, and multi-pass tasks.
+- **`src/memory.ts`**, **`src/skills.ts`**, **`src/scheduler.ts`**, **`src/subagent.ts`**, **`src/loop.ts`** — memory (with origin tracking and tombstones), skills, scheduling, subagents (with an optional read-only tool filter), and multi-pass tasks.
 - **`src/reflect.ts`** — the daily pass that mines `src/toollog.ts`'s activity log for repetition and drafts memory/Flow proposals.
-- **`src/sanitize.ts`** — strips injection vectors before content reaches the model or the UI.
+- **`src/toollog.ts`** — the SQLite activity log; also threads agent/parent lineage through nested `spawn_agent`/`loop_task` calls so a subagent's tool calls trace back to the turn that spawned it.
+- **`src/security.ts`**, **`src/sanitize.ts`** — flag content that reads like an injected instruction (web results, file reads, MCP output) before it reaches the model; strip injection vectors before content reaches the UI.
 
 The server only accepts loopback `Host` headers (no DNS rebinding), requires state-changing requests to be same-origin (CSRF), and serves local files only from folders you've allowed, under a locked-down CSP.
 

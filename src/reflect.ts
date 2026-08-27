@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { HOME_ROOT } from "./config.js";
 import { logsSince, type LogRow } from "./toollog.js";
 import { loadFlows, saveFlows, type Flow, type FlowNode, type FlowEdge } from "./flows.js";
-import { loadMemories, saveMemory } from "./memory.js";
+import { loadMemories, saveMemory, memoryFingerprint } from "./memory.js";
 import { loadSchedule, saveSchedule } from "./scheduler.js";
 
 // Reflection mines the activity log (toollog.ts) for things that keep
@@ -164,10 +164,16 @@ function extractKeys(text: string): string[] {
   return [...keys];
 }
 
-function memoryAlreadyCovers(key: string, memories: ReturnType<typeof loadMemories>): boolean {
-  return memories.some((m) =>
-    `${m.id} ${m.description} ${m.tags.join(" ")} ${m.body}`.toLowerCase().includes(key),
-  );
+// Substring check catches partial-overlap cases a hash never will (a memory
+// that already mentions the keyword among other things); the fingerprint check
+// added on top catches the case a substring check misses — a PREVIOUS reflect
+// pass's draft for this exact same body, saved under a different keyword/id.
+function memoryAlreadyCovers(key: string, memories: ReturnType<typeof loadMemories>, draftBody?: string): boolean {
+  const substringHit = memories.some((m) => `${m.id} ${m.description} ${m.tags.join(" ")} ${m.body}`.toLowerCase().includes(key));
+  if (substringHit) return true;
+  if (!draftBody) return false;
+  const fp = memoryFingerprint(draftBody);
+  return memories.some((m) => memoryFingerprint(m.body) === fp);
 }
 
 function draftMemory(key: string, count: number, examples: string[]): Parameters<typeof saveMemory>[0] {
@@ -177,6 +183,7 @@ function draftMemory(key: string, count: number, examples: string[]): Parameters
     description: `Asked about "${key}" ${count}×`,
     tags: ["reflect"],
     body: `Recurring theme in requests (seen ${count} times):\n\n${examples.map((e) => `- ${e}`).join("\n")}`,
+    origin: "synthesized",
   };
 }
 
@@ -272,14 +279,15 @@ export function runReflection(threshold = 4): Proposal[] {
     const id = `memory:${key}`;
     if (dismissed.has(id) || pendingIds.has(id)) continue;
     if (count < threshold) continue;
-    if (memoryAlreadyCovers(key, memories)) continue;
+    const draft = draftMemory(key, count, examples);
+    if (memoryAlreadyCovers(key, memories, draft.body)) continue;
     const p: Proposal = {
       id,
       kind: "memory",
       count,
       summary: `Asked about "${key}" ${count}× — save as memory`,
       createdAt: new Date().toISOString(),
-      draft: { memory: draftMemory(key, count, examples) },
+      draft: { memory: draft },
     };
     proposals.push(p);
     added.push(p);
@@ -301,7 +309,8 @@ export function approveProposal(id: string): { ok: boolean; message: string } {
   const p = proposals.find((x) => x.id === id);
   if (!p) return { ok: false, message: `no pending proposal "${id}"` };
   if (p.kind === "memory") {
-    saveMemory(p.draft.memory);
+    const r = saveMemory(p.draft.memory);
+    if (!r.ok) return { ok: false, message: r.message }; // leave it pending so the user sees why
   } else {
     saveFlows([...loadFlows(), p.draft.flow]);
     const dir = join(HOME_ROOT, "skills", p.draft.skill.name);

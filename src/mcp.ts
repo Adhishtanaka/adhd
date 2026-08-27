@@ -137,6 +137,18 @@ async function connect(name: string, spec: McpServer): Promise<Record<string, To
   return out;
 }
 
+// Full tool names (server_tool) whose server is configured trust:"read" — the
+// only MCP tools safe to keep in a readonly subagent (subagent.ts). Individual
+// tool safety can't be introspected from a foreign schema, so trust is decided
+// per-SERVER, same as everywhere else MCP trust is used.
+export function readOnlyMcpTools(): Set<string> {
+  const servers = loadConfig().mcpServers ?? {};
+  const out = new Set<string>();
+  for (const [name, infos] of Object.entries(catalog))
+    if (servers[name]?.trust === "read") for (const t of infos) out.add(t.full);
+  return out;
+}
+
 // One bad server must not stop adhd from starting, so failures are logged and
 // skipped — same contract as loadUserTools.
 export async function loadMcpTools(): Promise<Record<string, Tool>> {
