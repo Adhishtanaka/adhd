@@ -1103,13 +1103,23 @@ server = Bun.serve({
     if (p === "/") {
       const s = sessionFor(req);
       return new Response(Bun.file(join(PUBLIC, "index.html")), {
-        headers: { "set-cookie": `${SID_COOKIE}=${s.id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL / 1000}` },
+        // index.html references THIS build's hashed asset filenames — a stale
+        // cached copy points at JS/CSS that a later `vite build` deleted, so a
+        // fix that's genuinely deployed can still look unchanged (or half-broken)
+        // in a tab that never re-fetched it. No implicit browser heuristic gets
+        // the chance to decide that's "fresh enough": always revalidate.
+        headers: {
+          "cache-control": "no-cache",
+          "set-cookie": `${SID_COOKIE}=${s.id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL / 1000}`,
+        },
       });
     }
     // Vite build output: /assets/<name>-<hash>.js|css. The regex is the traversal
-    // guard — no slashes, no dots-dots, so join() can't escape PUBLIC.
+    // guard — no slashes, no dots-dots, so join() can't escape PUBLIC. The hash
+    // IS the cache key (a rebuild always mints a new filename), so unlike
+    // index.html above, these are safe to cache forever.
     if (/^\/assets\/[\w.-]+\.(js|css|map|svg|png|jpe?g|gif|webp|woff2?)$/.test(p))
-      return new Response(Bun.file(join(PUBLIC, p)));
+      return new Response(Bun.file(join(PUBLIC, p)), { headers: { "cache-control": "public, max-age=31536000, immutable" } });
 
     // serve a local file — restricted to allowed roots + same-site requests only
     if (p === "/local") {
