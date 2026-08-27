@@ -410,7 +410,7 @@ export function builtinTools(): Record<string, Tool> {
     bash: tool({
       description: "Run a shell command. The user must approve it first, and sees your `explain` text when deciding.",
       inputSchema: z.object({ command: z.string(), explain: EXPLAIN }),
-      execute: async ({ command, explain }) => {
+      execute: async ({ command, explain }, opts) => {
         // sudo blocks on an interactive password prompt this tool can't answer —
         // it just hangs the terminal until timeout. Refuse instead of running it.
         if (/\bsudo\b/.test(command))
@@ -418,9 +418,14 @@ export function builtinTools(): Record<string, Tool> {
         if (!(await approve("bash", command, explain))) return "user denied command";
         return withDeadline(`bash: ${command}`, SLOW.shell, async () => {
           try {
+            // signal: a Stop click aborts the turn's AbortController, which the SDK
+            // forwards here as opts.abortSignal — without wiring it into exec(),
+            // the process would keep running to completion no matter what the
+            // user clicked (see agent.ts's stop()).
             const { stdout, stderr } = await execAsync(command, {
               maxBuffer: 10 * 1024 * 1024,
               timeout: 120_000,
+              signal: opts.abortSignal,
             });
             return cap((stdout + stderr).trim()) || "(no output)";
           } catch (e) {
@@ -433,13 +438,14 @@ export function builtinTools(): Record<string, Tool> {
       description:
         "Run a PowerShell command via pwsh (cross-platform). The user must approve it first and sees your `explain` text when deciding. Needs PowerShell installed.",
       inputSchema: z.object({ command: z.string(), explain: EXPLAIN }),
-      execute: async ({ command, explain }) => {
+      execute: async ({ command, explain }, opts) => {
         if (!(await approve("pwsh", command, explain))) return "user denied command";
         return withDeadline(`powershell: ${command}`, SLOW.shell, async () => {
           try {
             const { stdout, stderr } = await execFileAsync("pwsh", ["-NoProfile", "-Command", command], {
               maxBuffer: 10 * 1024 * 1024,
               timeout: 120_000,
+              signal: opts.abortSignal,
             });
             return cap((stdout + stderr).trim()) || "(no output)";
           } catch (e: any) {
@@ -456,7 +462,7 @@ export function builtinTools(): Record<string, Tool> {
         code: z.string(),
         explain: EXPLAIN,
       }),
-      execute: async ({ code, explain }) => {
+      execute: async ({ code, explain }, opts) => {
         // A script is arbitrary code, so neither full access nor Flow
         // pre-approval may bypass this one-time warning.
         if (
@@ -475,6 +481,7 @@ export function builtinTools(): Record<string, Tool> {
             const { stdout, stderr } = await execFileAsync("bun", ["run", file], {
               maxBuffer: 10 * 1024 * 1024,
               timeout: 120_000,
+              signal: opts.abortSignal,
             });
             return cap((stdout + stderr).trim()) || "(no output)";
           } catch (e) {
@@ -492,7 +499,7 @@ export function builtinTools(): Record<string, Tool> {
         packages: z.array(z.string()).min(1).describe("package names, e.g. ['pandas', 'requests==2.31.0']"),
         explain: EXPLAIN,
       }),
-      execute: async ({ packages, explain }) => {
+      execute: async ({ packages, explain }, opts) => {
         if (!(await approve("pip_install", `pip install ${packages.join(" ")}  (sandboxed, ~/.adhd/sandbox/python)`, explain)))
           return "user denied install";
         return withDeadline(`pip_install: ${packages.join(" ")}`, SLOW.shell, async () => {
@@ -502,6 +509,7 @@ export function builtinTools(): Record<string, Tool> {
             const { stdout, stderr } = await execFileAsync(venvBin("pip"), ["install", ...packages], {
               maxBuffer: 10 * 1024 * 1024,
               timeout: 120_000,
+              signal: opts.abortSignal,
             });
             return cap((stdout + stderr).trim()) || "(no output)";
           } catch (e) {
@@ -519,7 +527,7 @@ export function builtinTools(): Record<string, Tool> {
         packages: z.array(z.string()).min(1).describe("package names, e.g. ['lodash', 'axios@1.6.0']"),
         explain: EXPLAIN,
       }),
-      execute: async ({ packages, explain }) => {
+      execute: async ({ packages, explain }, opts) => {
         if (!(await approve("npm_install", `npm install ${packages.join(" ")}  (sandboxed, ~/.adhd/sandbox/node)`, explain)))
           return "user denied install";
         return withDeadline(`npm_install: ${packages.join(" ")}`, SLOW.shell, async () => {
@@ -529,6 +537,7 @@ export function builtinTools(): Record<string, Tool> {
               cwd: NODE_SANDBOX,
               maxBuffer: 10 * 1024 * 1024,
               timeout: 120_000,
+              signal: opts.abortSignal,
             });
             return cap((stdout + stderr).trim()) || "(no output)";
           } catch (e: any) {
@@ -544,7 +553,7 @@ export function builtinTools(): Record<string, Tool> {
         "~/.adhd/sandbox/python/.venv (created on first use; packages from pip_install are available there). " +
         "The user must approve it first. Never touches your system or project Python.",
       inputSchema: z.object({ code: z.string(), explain: EXPLAIN }),
-      execute: async ({ code, explain }) => {
+      execute: async ({ code, explain }, opts) => {
         if (
           !(await confirmBash({
             command: `python <script>\n${code}`,
@@ -563,6 +572,7 @@ export function builtinTools(): Record<string, Tool> {
             const { stdout, stderr } = await execFileAsync(venvBin("python"), [file], {
               maxBuffer: 10 * 1024 * 1024,
               timeout: 120_000,
+              signal: opts.abortSignal,
             });
             return cap((stdout + stderr).trim()) || "(no output)";
           } catch (e) {
@@ -577,7 +587,7 @@ export function builtinTools(): Record<string, Tool> {
         "(~/.adhd/sandbox/node — packages from npm_install resolve from there via require()). The user must " +
         "approve it first. Prefer run_script (Bun/TS) unless you specifically need an npm_install'd package.",
       inputSchema: z.object({ code: z.string(), explain: EXPLAIN }),
-      execute: async ({ code, explain }) => {
+      execute: async ({ code, explain }, opts) => {
         if (
           !(await confirmBash({
             command: `node <script>\n${code}`,
@@ -599,6 +609,7 @@ export function builtinTools(): Record<string, Tool> {
               cwd: NODE_SANDBOX,
               maxBuffer: 10 * 1024 * 1024,
               timeout: 120_000,
+              signal: opts.abortSignal,
             });
             return cap((stdout + stderr).trim()) || "(no output)";
           } catch (e: any) {
