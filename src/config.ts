@@ -112,15 +112,19 @@ export function splitSpec(spec: string): [Provider, string] {
 }
 
 // Suggestions for the Settings dropdown, NOT a closed set — Settings also takes a
-// free-typed id. Verified July 2026.
+// free-typed id. Verified against GET /v1beta/models (ListModels) 2026-08-27 —
+// "gemini-3.1-pro" and "gemini-3-flash" had both been renamed/retired by Google
+// since the last check and were 404ing every call; there's currently no
+// non-preview "pro"-tier Gemini model at all, so -preview is the real id, not
+// a stale leftover.
 export const KNOWN_MODELS = [
   "deepseek-v4-flash",
   "deepseek-v4-pro",
   "anthropic:claude-sonnet-5",
   "anthropic:claude-opus-5",
   "anthropic:claude-haiku-4-5",
-  "google:gemini-3.1-pro",
-  "google:gemini-3-flash",
+  "google:gemini-3.1-pro-preview",
+  "google:gemini-3.7-flash",
 ] as const;
 
 const DEFAULT: Config = {
