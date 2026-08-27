@@ -1528,6 +1528,8 @@ function restoreTranscript(entries) {
       shownSpecs = new Set();
       shownSources = new Set();
       renderSpec(entry.spec);
+    } else if (entry.type === "sub") {
+      add(el("font-mono text-xs text-dim pl-4", entry.line));
     }
   }
   shownSpecs = new Set();

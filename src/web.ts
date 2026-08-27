@@ -60,7 +60,8 @@ type Session = {
 type TranscriptEntry =
   | { type: "user"; text: string }
   | { type: "assistant"; html: string }
-  | { type: "ui"; spec: Spec; carries: boolean };
+  | { type: "ui"; spec: Spec; carries: boolean }
+  | { type: "sub"; line: string };
 const sessions = new Map<string, Session>();
 const SID_COOKIE = "adhd_sid";
 // A browser that never comes back should not pin its history forever.
@@ -203,7 +204,14 @@ setAskUser((question, options) => {
     expire(token, `no answer in 5 min — using "${fallback}"`),
   );
 });
-setSubagentSink((line) => broadcast("sub", { line }));
+// Persisted (not just broadcast live) so a subagent's progress survives a
+// reconnect mid-run or a scheduled/background trigger nobody was watching —
+// without this, only the activity FAB (which re-reads fresh server state on
+// load) shows anything; the transcript replay had nothing to show.
+setSubagentSink((line) => {
+  if (active) rememberTranscript(active, { type: "sub", line });
+  broadcast("sub", { line });
+});
 setRunsSink(() => broadcastActivity());
 // Text nodes carry markdown (bold, lists, inline code). Render it to safe HTML
 // here — reusing the same marked+sanitize path as assistant prose — so the
