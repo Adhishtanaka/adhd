@@ -1320,7 +1320,7 @@ window.closeSettings = () => {
 };
 window.openMcpSettings = () => {
   window.closeFlows?.();
-  sessionStorage.setItem("adhd-settings-tab", "access");
+  sessionStorage.setItem("adhd-settings-tab", "mcp");
   window.openSettings();
 };
 document.getElementById("open-settings").onclick = openSettings;

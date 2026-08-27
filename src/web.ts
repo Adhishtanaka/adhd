@@ -533,6 +533,7 @@ function settingsFragment(error?: string): string {
       <button type="button" role="tab" id="settings-tab-general" data-settings-tab="general" aria-controls="settings-panel-general">General</button>
       <button type="button" role="tab" id="settings-tab-models" data-settings-tab="models" aria-controls="settings-panel-models">Models</button>
       <button type="button" role="tab" id="settings-tab-tools" data-settings-tab="tools" aria-controls="settings-panel-tools">Tools</button>
+      <button type="button" role="tab" id="settings-tab-mcp" data-settings-tab="mcp" aria-controls="settings-panel-mcp">MCP</button>
       <button type="button" role="tab" id="settings-tab-access" data-settings-tab="access" aria-controls="settings-panel-access">Access</button>
       <button type="button" role="tab" id="settings-tab-memory" data-settings-tab="memory" aria-controls="settings-panel-memory">Memory</button>
       <button type="button" role="tab" id="settings-tab-reflect" data-settings-tab="reflect" aria-controls="settings-panel-reflect">Reflect</button>
@@ -599,6 +600,12 @@ function settingsFragment(error?: string): string {
       <div class="settings-section">${capsFragment()}</div>`,
     ) +
     tab(
+      "mcp",
+      "MCP",
+      `${n(Object.keys(mcpServers()).length, "server")} connected.`,
+      `<div class="settings-section"><div id="mcp">${mcpFragment()}</div></div>`,
+    ) +
+    tab(
       "access",
       "Access",
       `Permission mode: ${MODE_LABEL[permissionMode()][0].toLowerCase()}.`,
@@ -609,9 +616,7 @@ function settingsFragment(error?: string): string {
       <h2>Always-allowed commands <span class="muted">(${n(allowedCommands().length, "command")})</span></h2>
       <div class="settings-section"><div id="allowed">${allowedFragment()}</div></div>
       <h2>Never-allowed commands <span class="muted">(${n(deniedCommands().length, "command")})</span></h2>
-      <div class="settings-section"><div id="denied">${deniedFragment()}</div></div>
-      <h2>MCP servers <span class="muted">(${n(Object.keys(mcpServers()).length, "server")})</span></h2>
-      <div class="settings-section"><div id="mcp">${mcpFragment()}</div></div>`,
+      <div class="settings-section"><div id="denied">${deniedFragment()}</div></div>`,
     ) +
     tab(
       "memory",
